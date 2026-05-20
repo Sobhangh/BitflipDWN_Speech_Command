@@ -53,20 +53,26 @@ DIRECTION_WORDS = ["up", "down", "left", "right", "go", "stop",
                    "forward", "backward", "follow"]
 
 # Compression
-TARGET_SAMPLES = 200          # samples per clip after compression
+TARGET_SAMPLES = 300          # samples per clip after compression
 COMPRESSION    = "average"     # "decimate" | "average"
 
 # Thermometer encoding
-NUM_BITS = 5                   # bits per sample → input_size = TARGET_SAMPLES * NUM_BITS
+NUM_BITS = 15                  # bits per sample → input_size = TARGET_SAMPLES * NUM_BITS
 
 # LUT architecture
 N_LUT      = 2                 # number of inputs per LUT node
 N_LAYERS   = 5                 # hidden LUT layers (all same width = input_size)
 
 # Noise augmentation
-USE_NOISE  = False              # mix background noise into training samples
+USE_NOISE  = True              # mix background noise into training samples
 NOISE_PROB = 0.5               # probability of adding noise per sample
-NOISE_SNR_DB = 10.0            # signal-to-noise ratio in dB
+NOISE_SNR_DB = 6.0            # signal-to-noise ratio in dB
+
+# Data augmentation options
+AUG_TIME_SHIFT = True         # randomly shift audio in time
+TIME_SHIFT_MAX = 0.1          # max shift as fraction of length (e.g. 0.1 = 10%)
+AUG_AMP_SCALE  = True         # randomly scale amplitude
+AMP_SCALE_RANGE = (0.7, 1.3)  # min/max amplitude scaling
 
 # Training
 TRAIN_RATIO = 0.70
@@ -150,8 +156,32 @@ def mix_noise(signal: np.ndarray,
 
     sig_power   = np.mean(signal    ** 2) + 1e-9
     noise_power = np.mean(noise_seg ** 2) + 1e-9
-    scale       = np.sqrt(sig_power / (noise_power * (10 ** (snr_db / 10))))
+    #scale       = np.sqrt(sig_power / (noise_power * (10 ** (snr_db / 10))))
+    scale = 1/snr_db
     return (signal + scale * noise_seg).astype(np.float32)
+
+
+# ===================== DATA AUGMENTATION =====================
+def random_time_shift(samples: np.ndarray, max_frac: float) -> np.ndarray:
+    """Randomly shift audio left/right by up to max_frac of its length."""
+    n = len(samples)
+    max_shift = int(n * max_frac)
+    if max_shift < 1:
+        return samples
+    shift = random.randint(-max_shift, max_shift)
+    if shift == 0:
+        return samples
+    elif shift > 0:
+        return np.pad(samples, (shift, 0), mode='constant')[:n]
+    else:
+        return np.pad(samples, (0, -shift), mode='constant')[-shift:n-shift]
+
+def random_amplitude_scale(samples: np.ndarray, scale_range: tuple) -> np.ndarray:
+    """Randomly scale amplitude by a factor in scale_range (min, max), then clamp to [-1, 1]."""
+    scale = random.uniform(*scale_range)
+    scaled = samples * scale
+    scaled = np.clip(scaled, -1.0, 1.0)
+    return scaled.astype(np.float32)
 
 
 # =============================================================================
@@ -199,6 +229,7 @@ def load_dataset(dataset_path: str,
     """
     samples_list, labels_list = [], []
 
+
     for folder, label in class_map.items():
         folder_path = os.path.join(dataset_path, folder)
         wav_files   = [f for f in os.listdir(folder_path) if f.endswith(".wav")]
@@ -208,10 +239,21 @@ def load_dataset(dataset_path: str,
             try:
                 sig = load_wav(os.path.join(folder_path, fname))
                 sig = compress(sig, TARGET_SAMPLES, COMPRESSION)
+
+                # Data augmentation (train only)
+                if is_train:
+                    if AUG_TIME_SHIFT and random.random() < 0.5:
+                        sig = random_time_shift(sig, TIME_SHIFT_MAX)
+                    if AUG_AMP_SCALE and random.random() < 0.5:
+                        sig = random_amplitude_scale(sig, AMP_SCALE_RANGE)
+
+                # Noise augmentation (train only)
                 if use_noise and is_train and noise_clips and random.random() < NOISE_PROB:
                     sig = mix_noise(sig, noise_clips, NOISE_SNR_DB)
+
                 samples_list.append(sig)
                 labels_list.append(label)
+
             except Exception:
                 pass  # skip corrupted files
 
@@ -300,14 +342,16 @@ def main():
     #   5 × LUTLayer(input_size → input_size, n=N_LUT)
     #   GroupSum(k=num_classes)  – groups input_size outputs into num_classes scores
     layers = []
-    for i in range(N_LAYERS):
-        mapping = "learnable" if i == 0 else "random"
-        layers.append(dwn.LUTLayer(input_size, input_size, n=N_LUT, mapping=mapping))
+    layer_width = input_size * 4
+    layers.append(dwn.LUTLayer(input_size, layer_width, n=N_LUT, mapping="learnable"))
+    for i in range(1, N_LAYERS):
+        mapping = "random" #"learnable" if i == 0 else "random"
+        layers.append(dwn.LUTLayer(layer_width, layer_width, n=N_LUT, mapping=mapping))
 
     layers.append(dwn.GroupSum(k=num_classes, tau=1 / 0.3))
 
     model = nn.Sequential(*layers).to(DEVICE)
-    print(f"Model: {N_LAYERS} × LUTLayer({input_size}→{input_size}, n={N_LUT}) + "
+    print(f"Model: {N_LAYERS} × LUTLayer({input_size}→{layer_width}, n={N_LUT}) + "
           f"GroupSum(k={num_classes})\n")
 
     optimizer = torch.optim.Adam(model.parameters(), lr=LR)
@@ -347,7 +391,7 @@ def main():
             correct    += (out.argmax(1) == by).sum().item()
             total      += len(by)
 
-        scheduler.step()
+        #scheduler.step()
 
         train_acc = correct / total
         val_acc   = evaluate(x_val, y_val)
