@@ -1,0 +1,271 @@
+import torch
+import torch.nn.functional as F
+
+from .lut_layer import LUTLayer
+
+
+class DWNConvLayer(torch.nn.Module):
+	def __init__(
+		self,
+		in_channels,
+		depth,
+		lut_rank,
+		kernels,
+		receptive_field,
+		stride=1,
+		groups=1,
+		ste=True,
+		flatten_output=True,
+		random_kernel_groups=False,
+		mapping_tau=0.001,
+	):
+		super().__init__()
+
+		assert in_channels > 0
+		assert depth > 0
+		assert lut_rank > 0
+		assert kernels > 0
+		assert receptive_field > 0
+		assert stride > 0
+		assert groups > 0
+		assert in_channels % groups == 0
+		assert isinstance(ste, bool)
+		assert isinstance(flatten_output, bool)
+		assert isinstance(random_kernel_groups, bool)
+		assert mapping_tau > 0
+		assert in_channels % groups == 0, "in_channels must be divisible by groups."
+		assert lut_rank ** depth <= receptive_field ** 2, "lut_rank^depth must be <= receptive_field^2 to fit in the convolution window."
+
+
+		self.in_channels = int(in_channels)
+		self.depth = int(depth)
+		self.lut_rank = int(lut_rank)
+		self.kernels = int(kernels)
+		self.receptive_field = int(receptive_field)
+		self.stride = int(stride)
+		self.groups = int(groups)
+		self.ste = ste
+		self.flatten_output = flatten_output
+		self.random_kernel_groups = random_kernel_groups
+		self.mapping_tau = float(mapping_tau)
+
+		self.leaf_size = self.lut_rank ** self.depth
+		self.level_node_counts = [self.lut_rank ** (self.depth - level - 1) for level in range(self.depth)]
+
+		# Tree is represented as a sequence of LUT layers: one LUTLayer per tree level.
+		self.lut_layers = torch.nn.ModuleList()
+		prev_nodes_per_kernel = self.leaf_size
+		for nodes_per_kernel in self.level_node_counts:
+			mapping = self._build_level_mapping(prev_nodes_per_kernel, nodes_per_kernel)
+			self.lut_layers.append(
+				LUTLayer(
+					input_size=self.kernels * prev_nodes_per_kernel,
+					output_size=self.kernels * nodes_per_kernel,
+					n=self.lut_rank,
+					mapping=mapping,
+					ste=self.ste,
+				)
+			)
+			prev_nodes_per_kernel = nodes_per_kernel
+
+		self.channels_per_group = self.in_channels // self.groups
+
+		# Kernel-to-group assignment remains fixed, but connection mappings are learnable.
+		self.register_buffer("kernel_groups", torch.empty(self.kernels, dtype=torch.int64), persistent=True)
+		self.Cc = torch.nn.Parameter(
+			torch.empty(self.kernels, self.leaf_size, self.channels_per_group, dtype=torch.float32),
+			requires_grad=True,
+		)
+		self.Ch = torch.nn.Parameter(
+			torch.empty(self.kernels, self.leaf_size, self.receptive_field, dtype=torch.float32),
+			requires_grad=True,
+		)
+		self.Cw = torch.nn.Parameter(
+			torch.empty(self.kernels, self.leaf_size, self.receptive_field, dtype=torch.float32),
+			requires_grad=True,
+		)
+
+		self.reset_parameters()
+
+	def _build_level_mapping(self, prev_nodes_per_kernel, nodes_per_kernel):
+		mapping = torch.empty(self.kernels * nodes_per_kernel, self.lut_rank, dtype=torch.int32)
+		for kernel_idx in range(self.kernels):
+			kernel_input_base = kernel_idx * prev_nodes_per_kernel
+			kernel_output_base = kernel_idx * nodes_per_kernel
+			for node_idx in range(nodes_per_kernel):
+				child_start = node_idx * self.lut_rank
+				mapping[kernel_output_base + node_idx] = torch.arange(
+					kernel_input_base + child_start,
+					kernel_input_base + child_start + self.lut_rank,
+					dtype=torch.int32,
+				)
+		return mapping
+
+	def reset_parameters(self):
+		for lut_layer in self.lut_layers:
+			with torch.no_grad():
+				num_tables, table_size = lut_layer.luts.shape
+				indices = torch.arange(table_size, device=lut_layer.luts.device, dtype=torch.int64)
+				pass_through = ((indices & 1).float() * 2.0 - 1.0).unsqueeze(0)
+				random_luts = torch.rand_like(lut_layer.luts) * 2.0 - 1.0
+				use_pass_through = torch.rand(num_tables, 1, device=lut_layer.luts.device) < 0.9
+				lut_layer.luts.copy_(torch.where(use_pass_through, pass_through, random_luts))
+		self.regenerate_connections()
+
+	def _init_onehot_logits(self, logits, indices):
+		# Build one-hot-like logits so argmax starts from sampled discrete connections.
+		logits.fill_(-4.0)
+		logits.scatter_(-1, indices.unsqueeze(-1), 4.0)
+
+	def regenerate_connections(self):
+		if self.random_kernel_groups:
+			kernel_groups = torch.randint(0, self.groups, (self.kernels,), dtype=torch.int64)
+		else:
+			kernel_groups = torch.arange(self.kernels, dtype=torch.int64) % self.groups
+
+		self.kernel_groups.copy_(kernel_groups)
+
+		with torch.no_grad():
+			cc_idx = torch.randint(0, self.channels_per_group, (self.kernels, self.leaf_size), dtype=torch.int64, device=self.Cc.device)
+			ch_idx = torch.randint(0, self.receptive_field, (self.kernels, self.leaf_size), dtype=torch.int64, device=self.Ch.device)
+			cw_idx = torch.randint(0, self.receptive_field, (self.kernels, self.leaf_size), dtype=torch.int64, device=self.Cw.device)
+			self._init_onehot_logits(self.Cc, cc_idx)
+			self._init_onehot_logits(self.Ch, ch_idx)
+			self._init_onehot_logits(self.Cw, cw_idx)
+
+	def _st_select(self, logits):
+		probs = torch.softmax(logits / self.mapping_tau, dim=-1)
+		indices = probs.argmax(dim=-1)
+		hard = torch.zeros_like(probs).scatter_(-1, indices.unsqueeze(-1), 1.0)
+		return hard + probs - probs.detach()
+
+	def hard_connection_indices(self):
+		cc_local = self.Cc.argmax(dim=-1)
+		group_offsets = (self.kernel_groups * self.channels_per_group).unsqueeze(1).to(cc_local.device)
+		cc = cc_local + group_offsets
+		ch = self.Ch.argmax(dim=-1)
+		cw = self.Cw.argmax(dim=-1)
+		return cc, ch, cw
+
+	def output_spatial_shape(self, height, width):
+		if height < self.receptive_field or width < self.receptive_field:
+			raise ValueError("Input spatial size must be >= receptive_field.")
+
+		out_h = 1 + (height - self.receptive_field) // self.stride
+		out_w = 1 + (width - self.receptive_field) // self.stride
+		return out_h, out_w
+
+	def _evaluate_tree(self, leaves):
+		# leaves: [N, K, Oh, Ow, leaf_size]
+		n, k, oh, ow, leaf_size = leaves.shape
+		state = leaves.permute(0, 2, 3, 1, 4).reshape(n * oh * ow, k * leaf_size)
+
+		for lut_layer in self.lut_layers:
+			state = lut_layer(state)
+
+		return state.reshape(n, oh, ow, k).permute(0, 3, 1, 2).contiguous()
+
+	def forward(self, x):
+		if x.ndim != 4:
+			raise ValueError("Expected input shape [batch, channels, height, width].")
+		if not x.is_cuda:
+			raise ValueError("DWNConv currently requires CUDA because LUTLayer CPU path is not implemented.")
+
+		batch_size, channels, height, width = x.shape
+		if channels != self.in_channels:
+			raise ValueError(f"Expected {self.in_channels} channels but got {channels}.")
+
+		out_h, out_w = self.output_spatial_shape(height, width)
+
+		cc_sel = self._st_select(self.Cc)
+		ch_sel = self._st_select(self.Ch)
+		cw_sel = self._st_select(self.Cw)
+
+		patches = torch.nn.functional.unfold(
+			x,
+			kernel_size=(self.receptive_field, self.receptive_field),
+			stride=self.stride,
+		)
+		patches = patches.reshape(
+			batch_size,
+			self.in_channels,
+			self.receptive_field,
+			self.receptive_field,
+			out_h * out_w,
+		)
+
+		leaves_per_kernel = []
+		for kernel_idx in range(self.kernels):
+			group_idx = int(self.kernel_groups[kernel_idx].item())
+			c_start = group_idx * self.channels_per_group
+			c_end = c_start + self.channels_per_group
+			patch_k = patches[:, c_start:c_end, :, :, :]
+
+			leaf_k = torch.einsum(
+				"nchwl,ac,ah,aw->nal",
+				patch_k,
+				cc_sel[kernel_idx],
+				ch_sel[kernel_idx],
+				cw_sel[kernel_idx],
+			)
+			leaves_per_kernel.append(leaf_k.reshape(batch_size, self.leaf_size, out_h, out_w).permute(0, 2, 3, 1))
+
+		leaves = torch.stack(leaves_per_kernel, dim=1)
+
+		roots = self._evaluate_tree(leaves)
+
+		if self.flatten_output:
+			return roots.reshape(batch_size, self.kernels * out_h * out_w)
+		return roots
+
+	def extra_repr(self):
+		return (
+			f"in_channels={self.in_channels}, depth={self.depth}, lut_rank={self.lut_rank}, "
+			f"kernels={self.kernels}, receptive_field={self.receptive_field}, stride={self.stride}, "
+			f"groups={self.groups}, ste={self.ste}, flatten_output={self.flatten_output}, "
+			f"random_kernel_groups={self.random_kernel_groups}, mapping_tau={self.mapping_tau}"
+		)
+
+
+class LogicalORPool2d(torch.nn.Module):
+	def __init__(self, kernel_size, stride):
+		super().__init__()
+
+		self.kernel_size = self._to_pair(kernel_size, "kernel_size")
+		self.stride = self._to_pair(stride, "stride")
+
+		if self.kernel_size[0] <= 0 or self.kernel_size[1] <= 0:
+			raise ValueError("kernel_size values must be > 0.")
+		if self.stride[0] <= 0 or self.stride[1] <= 0:
+			raise ValueError("stride values must be > 0.")
+
+	@staticmethod
+	def _to_pair(value, name):
+		if isinstance(value, int):
+			return (value, value)
+		if isinstance(value, tuple) and len(value) == 2 and all(isinstance(v, int) for v in value):
+			return value
+		raise ValueError(f"{name} must be an int or a tuple of 2 ints.")
+
+	def output_spatial_shape(self, height, width):
+		kh, kw = self.kernel_size
+		sh, sw = self.stride
+		if height < kh or width < kw:
+			raise ValueError("Input spatial size must be >= kernel_size.")
+		out_h = 1 + (height - kh) // sh
+		out_w = 1 + (width - kw) // sw
+		return out_h, out_w
+
+	def forward(self, x):
+		if x.ndim != 4:
+			raise ValueError("Expected input shape [batch, channels, height, width].")
+
+		_, _, height, width = x.shape
+		self.output_spatial_shape(height, width)
+
+		# Logical OR over each pooling window; for binary tensors this is max pooling.
+		x_bool = (x > 0).to(dtype=x.dtype)
+		return F.max_pool2d(x_bool, kernel_size=self.kernel_size, stride=self.stride)
+
+	def extra_repr(self):
+		return f"kernel_size={self.kernel_size}, stride={self.stride}"
