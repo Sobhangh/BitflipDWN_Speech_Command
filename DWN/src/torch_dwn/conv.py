@@ -17,7 +17,7 @@ class DWNConvLayer(torch.nn.Module):
 		ste=True,
 		flatten_output=True,
 		random_kernel_groups=False,
-		learnable_connections=True,
+		learnable_connections=False,
 		mapping_tau=0.001,
 		debug=False,
 	):
