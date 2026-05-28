@@ -17,8 +17,9 @@ class DWNConvLayer(torch.nn.Module):
 		ste=True,
 		flatten_output=True,
 		random_kernel_groups=False,
+		learnable_connections=True,
 		mapping_tau=0.001,
-		debug=True,
+		debug=False,
 	):
 		super().__init__()
 
@@ -33,6 +34,7 @@ class DWNConvLayer(torch.nn.Module):
 		assert isinstance(ste, bool)
 		assert isinstance(flatten_output, bool)
 		assert isinstance(random_kernel_groups, bool)
+		assert isinstance(learnable_connections, bool)
 		assert isinstance(debug, bool)
 		assert mapping_tau > 0
 		assert in_channels % groups == 0, "in_channels must be divisible by groups."
@@ -49,12 +51,13 @@ class DWNConvLayer(torch.nn.Module):
 		self.ste = ste
 		self.flatten_output = flatten_output
 		self.random_kernel_groups = random_kernel_groups
+		self.learnable_connections = learnable_connections
 		self.mapping_tau = float(mapping_tau)
 		self.debug = debug
-
+        
 		self.leaf_size = self.lut_rank ** self.depth
 		self.level_node_counts = [self.lut_rank ** (self.depth - level - 1) for level in range(self.depth)]
-
+        
 		# Tree is represented as a sequence of LUT layers: one LUTLayer per tree level.
 		self.lut_layers = torch.nn.ModuleList()
 		prev_nodes_per_kernel = self.leaf_size
@@ -75,18 +78,23 @@ class DWNConvLayer(torch.nn.Module):
 
 		# Kernel-to-group assignment remains fixed, but connection mappings are learnable.
 		self.register_buffer("kernel_groups", torch.empty(self.kernels, dtype=torch.int64), persistent=True)
-		self.Cc = torch.nn.Parameter(
-			torch.empty(self.kernels, self.leaf_size, self.channels_per_group, dtype=torch.float32),
-			requires_grad=True,
-		)
-		self.Ch = torch.nn.Parameter(
-			torch.empty(self.kernels, self.leaf_size, self.receptive_field, dtype=torch.float32),
-			requires_grad=True,
-		)
-		self.Cw = torch.nn.Parameter(
-			torch.empty(self.kernels, self.leaf_size, self.receptive_field, dtype=torch.float32),
-			requires_grad=True,
-		)
+		if self.learnable_connections:
+			self.Cc = torch.nn.Parameter(
+				torch.empty(self.kernels, self.leaf_size, self.channels_per_group, dtype=torch.float32),
+				requires_grad=True,
+			)
+			self.Ch = torch.nn.Parameter(
+				torch.empty(self.kernels, self.leaf_size, self.receptive_field, dtype=torch.float32),
+				requires_grad=True,
+			)
+			self.Cw = torch.nn.Parameter(
+				torch.empty(self.kernels, self.leaf_size, self.receptive_field, dtype=torch.float32),
+				requires_grad=True,
+			)
+		else:
+			self.register_buffer("Cc", torch.empty(self.kernels, self.leaf_size, dtype=torch.int64), persistent=True)
+			self.register_buffer("Ch", torch.empty(self.kernels, self.leaf_size, dtype=torch.int64), persistent=True)
+			self.register_buffer("Cw", torch.empty(self.kernels, self.leaf_size, dtype=torch.int64), persistent=True)
 
 		self.reset_parameters()
 
@@ -119,7 +127,7 @@ class DWNConvLayer(torch.nn.Module):
 				indices = torch.arange(table_size, device=lut_layer.luts.device, dtype=torch.int64)
 				pass_through = ((indices & 1).float() * 2.0 - 1.0).unsqueeze(0)
 				random_luts = torch.rand_like(lut_layer.luts) * 2.0 - 1.0
-				use_pass_through = torch.rand(num_tables, 1, device=lut_layer.luts.device) < 0.9
+				use_pass_through = torch.rand(num_tables, 1, device=lut_layer.luts.device) < 0.06 #0.9
 				lut_layer.luts.copy_(torch.where(use_pass_through, pass_through, random_luts))
 		self.regenerate_connections()
 		self._debug("reset_parameters done")
@@ -138,19 +146,27 @@ class DWNConvLayer(torch.nn.Module):
 
 		self.kernel_groups.copy_(kernel_groups)
 
-		with torch.no_grad():
-			cc_idx = torch.randint(0, self.channels_per_group, (self.kernels, self.leaf_size), dtype=torch.int64, device=self.Cc.device)
-			ch_idx = torch.randint(0, self.receptive_field, (self.kernels, self.leaf_size), dtype=torch.int64, device=self.Ch.device)
-			cw_idx = torch.randint(0, self.receptive_field, (self.kernels, self.leaf_size), dtype=torch.int64, device=self.Cw.device)
-			self._init_onehot_logits(self.Cc, cc_idx)
-			self._init_onehot_logits(self.Ch, ch_idx)
-			self._init_onehot_logits(self.Cw, cw_idx)
+		if self.learnable_connections:
+			with torch.no_grad():
+				cc_idx = torch.randint(0, self.channels_per_group, (self.kernels, self.leaf_size), dtype=torch.int64, device=self.Cc.device)
+				ch_idx = torch.randint(0, self.receptive_field, (self.kernels, self.leaf_size), dtype=torch.int64, device=self.Ch.device)
+				cw_idx = torch.randint(0, self.receptive_field, (self.kernels, self.leaf_size), dtype=torch.int64, device=self.Cw.device)
+				self._init_onehot_logits(self.Cc, cc_idx)
+				self._init_onehot_logits(self.Ch, ch_idx)
+				self._init_onehot_logits(self.Cw, cw_idx)
+		else:
+			self.Cc.copy_(torch.randint(0, self.channels_per_group, (self.kernels, self.leaf_size), dtype=torch.int64, device=self.Cc.device))
+			self.Ch.copy_(torch.randint(0, self.receptive_field, (self.kernels, self.leaf_size), dtype=torch.int64, device=self.Ch.device))
+			self.Cw.copy_(torch.randint(0, self.receptive_field, (self.kernels, self.leaf_size), dtype=torch.int64, device=self.Cw.device))
 		self._debug(
 			f"regenerate_connections done kernel_groups_shape={tuple(self.kernel_groups.shape)}, "
+			f"learnable_connections={self.learnable_connections}, "
 			f"Cc_shape={tuple(self.Cc.shape)}, Ch_shape={tuple(self.Ch.shape)}, Cw_shape={tuple(self.Cw.shape)}"
 		)
 
 	def _st_select(self, logits):
+		if not self.learnable_connections:
+			raise RuntimeError("_st_select called in random-connections mode.")
 		self._debug(f"st_select logits_shape={tuple(logits.shape)}")
 		probs = torch.softmax(logits / self.mapping_tau, dim=-1)
 		indices = probs.argmax(dim=-1)
@@ -161,51 +177,38 @@ class DWNConvLayer(torch.nn.Module):
 		return hard + probs - probs.detach()
 
 	def hard_connection_indices(self):
-		cc_local = self.Cc.argmax(dim=-1)
+		if self.learnable_connections:
+			cc_local = self.Cc.argmax(dim=-1)
+			ch = self.Ch.argmax(dim=-1)
+			cw = self.Cw.argmax(dim=-1)
+		else:
+			cc_local = self.Cc
+			ch = self.Ch
+			cw = self.Cw
+
 		group_offsets = (self.kernel_groups * self.channels_per_group).unsqueeze(1).to(cc_local.device)
 		cc = cc_local + group_offsets
-		ch = self.Ch.argmax(dim=-1)
-		cw = self.Cw.argmax(dim=-1)
 		return cc, ch, cw
 
-	def output_spatial_shape(self, height, width):
-		if height < self.receptive_field or width < self.receptive_field:
-			raise ValueError("Input spatial size must be >= receptive_field.")
+	def _forward_random_connections(self, x, batch_size, out_h, out_w, height, width):
+		cc, ch, cw = self.hard_connection_indices()
+		self._debug(
+			f"forward random mappings cc={tuple(cc.shape)}, ch={tuple(ch.shape)}, cw={tuple(cw.shape)}"
+		)
 
-		out_h = 1 + (height - self.receptive_field) // self.stride
-		out_w = 1 + (width - self.receptive_field) // self.stride
-		return out_h, out_w
+		y_offsets = torch.arange(out_h, device=x.device, dtype=torch.int64) * self.stride
+		x_offsets = torch.arange(out_w, device=x.device, dtype=torch.int64) * self.stride
 
-	def _evaluate_tree(self, leaves):
-		# leaves: [N, K, Oh, Ow, leaf_size]
-		self._debug(f"evaluate_tree input_leaves_shape={tuple(leaves.shape)}")
-		n, k, oh, ow, leaf_size = leaves.shape
-		state = leaves.permute(0, 2, 3, 1, 4).reshape(n * oh * ow, k * leaf_size)
-		self._debug(f"evaluate_tree state_shape_after_reshape={tuple(state.shape)}")
+		abs_h = ch[:, None, None, :] + y_offsets[None, :, None, None]
+		abs_w = cw[:, None, None, :] + x_offsets[None, None, :, None]
 
-		for level_idx, lut_layer in enumerate(self.lut_layers):
-			self._debug(f"evaluate_tree level={level_idx} input_shape={tuple(state.shape)}")
-			state = lut_layer(state)
-			self._debug(f"evaluate_tree level={level_idx} output_shape={tuple(state.shape)}")
+		linear_idx = cc[:, None, None, :] * (height * width) + abs_h * width + abs_w
+		x_flat = x.reshape(batch_size, -1)
+		leaves = x_flat[:, linear_idx.reshape(-1)].reshape(batch_size, self.kernels, out_h, out_w, self.leaf_size)
+		self._debug(f"forward random leaves_shape={tuple(leaves.shape)}")
+		return leaves
 
-		out = state.reshape(n, oh, ow, k).permute(0, 3, 1, 2).contiguous()
-		self._debug(f"evaluate_tree output_shape={tuple(out.shape)}")
-		return out
-
-	def forward(self, x):
-		self._debug(f"forward start x_shape={tuple(x.shape)}, x_device={x.device}, x_dtype={x.dtype}")
-		if x.ndim != 4:
-			raise ValueError("Expected input shape [batch, channels, height, width].")
-		if not x.is_cuda:
-			raise ValueError("DWNConv currently requires CUDA because LUTLayer CPU path is not implemented.")
-
-		batch_size, channels, height, width = x.shape
-		if channels != self.in_channels:
-			raise ValueError(f"Expected {self.in_channels} channels but got {channels}.")
-
-		out_h, out_w = self.output_spatial_shape(height, width)
-		self._debug(f"forward output_spatial_shape out_h={out_h}, out_w={out_w}")
-
+	def _forward_learnable_connections(self, x, batch_size, out_h, out_w):
 		cc_sel = self._st_select(self.Cc)
 		ch_sel = self._st_select(self.Ch)
 		cw_sel = self._st_select(self.Cw)
@@ -250,6 +253,50 @@ class DWNConvLayer(torch.nn.Module):
 
 		leaves = torch.stack(leaves_per_kernel, dim=1)
 		self._debug(f"forward stacked_leaves_shape={tuple(leaves.shape)}")
+		return leaves
+
+	def output_spatial_shape(self, height, width):
+		if height < self.receptive_field or width < self.receptive_field:
+			raise ValueError("Input spatial size must be >= receptive_field.")
+
+		out_h = 1 + (height - self.receptive_field) // self.stride
+		out_w = 1 + (width - self.receptive_field) // self.stride
+		return out_h, out_w
+
+	def _evaluate_tree(self, leaves):
+		# leaves: [N, K, Oh, Ow, leaf_size]
+		self._debug(f"evaluate_tree input_leaves_shape={tuple(leaves.shape)}")
+		n, k, oh, ow, leaf_size = leaves.shape
+		state = leaves.permute(0, 2, 3, 1, 4).reshape(n * oh * ow, k * leaf_size)
+		self._debug(f"evaluate_tree state_shape_after_reshape={tuple(state.shape)}")
+
+		for level_idx, lut_layer in enumerate(self.lut_layers):
+			self._debug(f"evaluate_tree level={level_idx} input_shape={tuple(state.shape)}")
+			state = lut_layer(state)
+			self._debug(f"evaluate_tree level={level_idx} output_shape={tuple(state.shape)}")
+
+		out = state.reshape(n, oh, ow, k).permute(0, 3, 1, 2).contiguous()
+		self._debug(f"evaluate_tree output_shape={tuple(out.shape)}")
+		return out
+
+	def forward(self, x):
+		self._debug(f"forward start x_shape={tuple(x.shape)}, x_device={x.device}, x_dtype={x.dtype}")
+		if x.ndim != 4:
+			raise ValueError("Expected input shape [batch, channels, height, width].")
+		if not x.is_cuda:
+			raise ValueError("DWNConv currently requires CUDA because LUTLayer CPU path is not implemented.")
+
+		batch_size, channels, height, width = x.shape
+		if channels != self.in_channels:
+			raise ValueError(f"Expected {self.in_channels} channels but got {channels}.")
+
+		out_h, out_w = self.output_spatial_shape(height, width)
+		self._debug(f"forward output_spatial_shape out_h={out_h}, out_w={out_w}")
+
+		if self.learnable_connections:
+			leaves = self._forward_learnable_connections(x, batch_size, out_h, out_w)
+		else:
+			leaves = self._forward_random_connections(x, batch_size, out_h, out_w, height, width)
 
 		roots = self._evaluate_tree(leaves)
 		self._debug(f"forward roots_shape={tuple(roots.shape)}")
@@ -266,7 +313,8 @@ class DWNConvLayer(torch.nn.Module):
 			f"in_channels={self.in_channels}, depth={self.depth}, lut_rank={self.lut_rank}, "
 			f"kernels={self.kernels}, receptive_field={self.receptive_field}, stride={self.stride}, "
 			f"groups={self.groups}, ste={self.ste}, flatten_output={self.flatten_output}, "
-			f"random_kernel_groups={self.random_kernel_groups}, mapping_tau={self.mapping_tau}, debug={self.debug}"
+			f"random_kernel_groups={self.random_kernel_groups}, learnable_connections={self.learnable_connections}, "
+			f"mapping_tau={self.mapping_tau}, debug={self.debug}"
 		)
 
 
