@@ -18,6 +18,7 @@ class DWNConvLayer(torch.nn.Module):
 		flatten_output=True,
 		random_kernel_groups=False,
 		mapping_tau=0.001,
+		debug=False,
 	):
 		super().__init__()
 
@@ -32,6 +33,7 @@ class DWNConvLayer(torch.nn.Module):
 		assert isinstance(ste, bool)
 		assert isinstance(flatten_output, bool)
 		assert isinstance(random_kernel_groups, bool)
+		assert isinstance(debug, bool)
 		assert mapping_tau > 0
 		assert in_channels % groups == 0, "in_channels must be divisible by groups."
 		assert lut_rank ** depth <= receptive_field ** 2, "lut_rank^depth must be <= receptive_field^2 to fit in the convolution window."
@@ -48,6 +50,7 @@ class DWNConvLayer(torch.nn.Module):
 		self.flatten_output = flatten_output
 		self.random_kernel_groups = random_kernel_groups
 		self.mapping_tau = float(mapping_tau)
+		self.debug = debug
 
 		self.leaf_size = self.lut_rank ** self.depth
 		self.level_node_counts = [self.lut_rank ** (self.depth - level - 1) for level in range(self.depth)]
@@ -87,7 +90,14 @@ class DWNConvLayer(torch.nn.Module):
 
 		self.reset_parameters()
 
+	def _debug(self, msg):
+		if self.debug:
+			print(f"[DWNConvLayer] {msg}")
+
 	def _build_level_mapping(self, prev_nodes_per_kernel, nodes_per_kernel):
+		self._debug(
+			f"build_level_mapping prev_nodes_per_kernel={prev_nodes_per_kernel}, nodes_per_kernel={nodes_per_kernel}"
+		)
 		mapping = torch.empty(self.kernels * nodes_per_kernel, self.lut_rank, dtype=torch.int32)
 		for kernel_idx in range(self.kernels):
 			kernel_input_base = kernel_idx * prev_nodes_per_kernel
@@ -102,6 +112,7 @@ class DWNConvLayer(torch.nn.Module):
 		return mapping
 
 	def reset_parameters(self):
+		self._debug("reset_parameters start")
 		for lut_layer in self.lut_layers:
 			with torch.no_grad():
 				num_tables, table_size = lut_layer.luts.shape
@@ -111,6 +122,7 @@ class DWNConvLayer(torch.nn.Module):
 				use_pass_through = torch.rand(num_tables, 1, device=lut_layer.luts.device) < 0.9
 				lut_layer.luts.copy_(torch.where(use_pass_through, pass_through, random_luts))
 		self.regenerate_connections()
+		self._debug("reset_parameters done")
 
 	def _init_onehot_logits(self, logits, indices):
 		# Build one-hot-like logits so argmax starts from sampled discrete connections.
@@ -118,6 +130,7 @@ class DWNConvLayer(torch.nn.Module):
 		logits.scatter_(-1, indices.unsqueeze(-1), 4.0)
 
 	def regenerate_connections(self):
+		self._debug("regenerate_connections start")
 		if self.random_kernel_groups:
 			kernel_groups = torch.randint(0, self.groups, (self.kernels,), dtype=torch.int64)
 		else:
@@ -132,11 +145,19 @@ class DWNConvLayer(torch.nn.Module):
 			self._init_onehot_logits(self.Cc, cc_idx)
 			self._init_onehot_logits(self.Ch, ch_idx)
 			self._init_onehot_logits(self.Cw, cw_idx)
+		self._debug(
+			f"regenerate_connections done kernel_groups_shape={tuple(self.kernel_groups.shape)}, "
+			f"Cc_shape={tuple(self.Cc.shape)}, Ch_shape={tuple(self.Ch.shape)}, Cw_shape={tuple(self.Cw.shape)}"
+		)
 
 	def _st_select(self, logits):
+		self._debug(f"st_select logits_shape={tuple(logits.shape)}")
 		probs = torch.softmax(logits / self.mapping_tau, dim=-1)
 		indices = probs.argmax(dim=-1)
 		hard = torch.zeros_like(probs).scatter_(-1, indices.unsqueeze(-1), 1.0)
+		self._debug(
+			f"st_select probs_shape={tuple(probs.shape)}, hard_shape={tuple(hard.shape)}, indices_shape={tuple(indices.shape)}"
+		)
 		return hard + probs - probs.detach()
 
 	def hard_connection_indices(self):
@@ -157,15 +178,22 @@ class DWNConvLayer(torch.nn.Module):
 
 	def _evaluate_tree(self, leaves):
 		# leaves: [N, K, Oh, Ow, leaf_size]
+		self._debug(f"evaluate_tree input_leaves_shape={tuple(leaves.shape)}")
 		n, k, oh, ow, leaf_size = leaves.shape
 		state = leaves.permute(0, 2, 3, 1, 4).reshape(n * oh * ow, k * leaf_size)
+		self._debug(f"evaluate_tree state_shape_after_reshape={tuple(state.shape)}")
 
-		for lut_layer in self.lut_layers:
+		for level_idx, lut_layer in enumerate(self.lut_layers):
+			self._debug(f"evaluate_tree level={level_idx} input_shape={tuple(state.shape)}")
 			state = lut_layer(state)
+			self._debug(f"evaluate_tree level={level_idx} output_shape={tuple(state.shape)}")
 
-		return state.reshape(n, oh, ow, k).permute(0, 3, 1, 2).contiguous()
+		out = state.reshape(n, oh, ow, k).permute(0, 3, 1, 2).contiguous()
+		self._debug(f"evaluate_tree output_shape={tuple(out.shape)}")
+		return out
 
 	def forward(self, x):
+		self._debug(f"forward start x_shape={tuple(x.shape)}, x_device={x.device}, x_dtype={x.dtype}")
 		if x.ndim != 4:
 			raise ValueError("Expected input shape [batch, channels, height, width].")
 		if not x.is_cuda:
@@ -176,16 +204,21 @@ class DWNConvLayer(torch.nn.Module):
 			raise ValueError(f"Expected {self.in_channels} channels but got {channels}.")
 
 		out_h, out_w = self.output_spatial_shape(height, width)
+		self._debug(f"forward output_spatial_shape out_h={out_h}, out_w={out_w}")
 
 		cc_sel = self._st_select(self.Cc)
 		ch_sel = self._st_select(self.Ch)
 		cw_sel = self._st_select(self.Cw)
+		self._debug(
+			f"forward selected_mappings cc_sel={tuple(cc_sel.shape)}, ch_sel={tuple(ch_sel.shape)}, cw_sel={tuple(cw_sel.shape)}"
+		)
 
 		patches = torch.nn.functional.unfold(
 			x,
 			kernel_size=(self.receptive_field, self.receptive_field),
 			stride=self.stride,
 		)
+		self._debug(f"forward unfold_output_shape={tuple(patches.shape)}")
 		patches = patches.reshape(
 			batch_size,
 			self.in_channels,
@@ -193,6 +226,7 @@ class DWNConvLayer(torch.nn.Module):
 			self.receptive_field,
 			out_h * out_w,
 		)
+		self._debug(f"forward patches_reshaped_shape={tuple(patches.shape)}")
 
 		leaves_per_kernel = []
 		for kernel_idx in range(self.kernels):
@@ -200,6 +234,10 @@ class DWNConvLayer(torch.nn.Module):
 			c_start = group_idx * self.channels_per_group
 			c_end = c_start + self.channels_per_group
 			patch_k = patches[:, c_start:c_end, :, :, :]
+			if self.debug and kernel_idx < 2:
+				self._debug(
+					f"forward kernel={kernel_idx} group={group_idx} patch_k_shape={tuple(patch_k.shape)}"
+				)
 
 			leaf_k = torch.einsum(
 				"nchwl,ac,ah,aw->nal",
@@ -211,11 +249,16 @@ class DWNConvLayer(torch.nn.Module):
 			leaves_per_kernel.append(leaf_k.reshape(batch_size, self.leaf_size, out_h, out_w).permute(0, 2, 3, 1))
 
 		leaves = torch.stack(leaves_per_kernel, dim=1)
+		self._debug(f"forward stacked_leaves_shape={tuple(leaves.shape)}")
 
 		roots = self._evaluate_tree(leaves)
+		self._debug(f"forward roots_shape={tuple(roots.shape)}")
 
 		if self.flatten_output:
-			return roots.reshape(batch_size, self.kernels * out_h * out_w)
+			out = roots.reshape(batch_size, self.kernels * out_h * out_w)
+			self._debug(f"forward output_flat_shape={tuple(out.shape)}")
+			return out
+		self._debug(f"forward output_shape={tuple(roots.shape)}")
 		return roots
 
 	def extra_repr(self):
@@ -223,7 +266,7 @@ class DWNConvLayer(torch.nn.Module):
 			f"in_channels={self.in_channels}, depth={self.depth}, lut_rank={self.lut_rank}, "
 			f"kernels={self.kernels}, receptive_field={self.receptive_field}, stride={self.stride}, "
 			f"groups={self.groups}, ste={self.ste}, flatten_output={self.flatten_output}, "
-			f"random_kernel_groups={self.random_kernel_groups}, mapping_tau={self.mapping_tau}"
+			f"random_kernel_groups={self.random_kernel_groups}, mapping_tau={self.mapping_tau}, debug={self.debug}"
 		)
 
 

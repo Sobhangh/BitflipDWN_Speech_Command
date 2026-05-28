@@ -68,9 +68,9 @@ class LUTLayer(torch.nn.Module):
     def forward(self, x):
         
         # Clamp LUTs
-        if self.training and self.clamp_luts:
-            with torch.no_grad():
-                self.luts.clamp_(-1, 1)
+        # if self.training and self.clamp_luts:
+        #     with torch.no_grad():
+        #         self.luts.clamp_(-1, 1)
         
         # Learnable Mapping
         if isinstance(self.mapping, LearnableMapping):
