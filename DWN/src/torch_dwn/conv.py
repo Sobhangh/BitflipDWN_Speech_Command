@@ -127,7 +127,7 @@ class DWNConvLayer(torch.nn.Module):
 				indices = torch.arange(table_size, device=lut_layer.luts.device, dtype=torch.int64)
 				pass_through = ((indices & 1).float() * 2.0 - 1.0).unsqueeze(0)
 				random_luts = torch.rand_like(lut_layer.luts) * 2.0 - 1.0
-				use_pass_through = torch.rand(num_tables, 1, device=lut_layer.luts.device) < 0.06 #0.9
+				use_pass_through = torch.rand(num_tables, 1, device=lut_layer.luts.device) < 0.9 #0.9
 				lut_layer.luts.copy_(torch.where(use_pass_through, pass_through, random_luts))
 		self.regenerate_connections()
 		self._debug("reset_parameters done")

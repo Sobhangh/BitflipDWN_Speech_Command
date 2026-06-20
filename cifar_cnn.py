@@ -74,27 +74,55 @@ therm_bits=3
 thermometer = dwn.DistributiveThermometer(num_bits=therm_bits, channel_wise=True).fit(x_train)
 x_train = thermometer.binarize(x_train)
 x_test = thermometer.binarize(x_test)
-out_dim1 = 32 - 15 + 1
-out_dim2 = 1 + (out_dim1 -6)//2
-kernel1 = 12
-mlp_layer = out_dim2 * out_dim2 * kernel1 * 2  #out_dim * out_dim * kernel1
+
+
+# out_dim1 = 1 + (32 - 6)//2 
+# out_dim2 = 1 + (out_dim1 -6)//2
+# out_dim3 = 1 + (out_dim2 -3)//2
+# kernel1 = 12
+# mlp_layer = out_dim3 * out_dim3 * kernel1 * 4  #out_dim * out_dim * kernel1
 # model = nn.Sequential(
-#     dwn.DWNConvLayer(in_channels=3*therm_bits, groups=3, kernels=kernel1, flatten_output=False),
-#     dwn.DWNConvLayer(in_channels=kernel1, groups=4, kernels=kernel1*2, depth=2, stride=2, receptive_field=6),
+#     dwn.DWNConvLayer(in_channels=3*therm_bits, groups=3, kernels=kernel1, depth=2, stride=2, receptive_field=6, flatten_output=False),
+#     dwn.DWNConvLayer(in_channels=kernel1, groups=4, kernels=kernel1*2, depth=2, stride=2, receptive_field=6, flatten_output=False),
+#     dwn.DWNConvLayer(in_channels=kernel1 * 2, groups=4 * 2, kernels=kernel1*4, depth=1, stride=2, receptive_field=3, flatten_output=True),
 #     dwn.LUTLayer(mlp_layer, 1000, n=4),
 #     #dwn.LUTLayer(int(mlp_layer / 4), 1000, n=4),
 #     dwn.GroupSum(k=10, tau=1/0.1)
 # )
-mlp_layer = out_dim1 * out_dim1 * kernel1
+
+
+out_dim1 = 1 + (32 - 3)
+out_dim2 = 1 + (out_dim1 -3)//2
+out_dim3 = 1 + (out_dim1 -3)//2
+out_dim4 = 1 + (out_dim2 -3)//2
+out_dim5 = 1 + (out_dim3 -3)//2
+kernel1 = 256
+groupsNb = kernel1/4
+increase_factor = 4
+mlp_layer = out_dim5 * out_dim5 * kernel1 * (increase_factor ** 4)  #out_dim * out_dim * kernel1
+tau = (mlp_layer  / 10) / 100
 model = nn.Sequential(
-    dwn.DWNConvLayer(in_channels=3*therm_bits, groups=3, kernels=kernel1, flatten_output=True, learnable_connections=True),
-    dwn.LUTLayer(mlp_layer, int(mlp_layer / 4), n=4),
-    dwn.LUTLayer(int(mlp_layer / 4), 1000, n=4),
-    dwn.GroupSum(k=10, tau=1/0.1)
+    dwn.DWNConvLayer(in_channels=3*therm_bits, groups=3, kernels=kernel1, depth=1, stride=1, receptive_field=3, flatten_output=False),
+    dwn.DWNConvLayer(in_channels=kernel1, groups=groupsNb, kernels=kernel1 * (increase_factor ** 1), depth=1, stride=2, receptive_field=3, flatten_output=False),
+    dwn.DWNConvLayer(in_channels=kernel1 * (increase_factor ** 1), groups=groupsNb * (increase_factor ** 1), kernels=kernel1 * (increase_factor ** 2), depth=1, stride=2, receptive_field=3, flatten_output=False),
+    dwn.DWNConvLayer(in_channels=kernel1 * (increase_factor ** 2), groups=groupsNb * (increase_factor ** 2), kernels=kernel1 * (increase_factor ** 3), depth=1, stride=2, receptive_field=3, flatten_output=False),
+    dwn.DWNConvLayer(in_channels=kernel1 * (increase_factor ** 3), groups=groupsNb * (increase_factor ** 3), kernels=kernel1 * (increase_factor ** 4), depth=1, stride=2, receptive_field=3, flatten_output=True),
+    dwn.LUTLayer(mlp_layer, mlp_layer * 2, n=4),
+    dwn.LUTLayer(mlp_layer * 2, mlp_layer, n=4),
+    dwn.GroupSum(k=10, tau=tau)
 )
 
+
+# mlp_layer = out_dim1 * out_dim1 * kernel1
+# model = nn.Sequential(
+#     dwn.DWNConvLayer(in_channels=3*therm_bits, groups=3, kernels=kernel1, flatten_output=True, learnable_connections=True),
+#     dwn.LUTLayer(mlp_layer, int(mlp_layer / 4), n=4),
+#     dwn.LUTLayer(int(mlp_layer / 4), 1000, n=4),
+#     dwn.GroupSum(k=10, tau=1/0.1)
+# )
+
 model = model.cuda()
-if device.type == "cuda" and torch.cuda.device_count() > 1:
+if torch.cuda.device_count() > 1:
 		print("Using", torch.cuda.device_count(), "GPUs for student actor modules")
 		# Wrap actor branches only, so the top-level student API remains unchanged.
 		model = nn.DataParallel(model)
