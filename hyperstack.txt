@@ -1,0 +1,42 @@
+#####  Be careful to use cuda of 12.6+ when chosing the ubuntu OS ################
+
+cd C:\Users\ghasob\ProjectCodes
+ssh -i RL_CDLG_Hyperstack ubuntu@<ip-addr>
+
+sudo apt update
+sudo apt install python3-venv python3-full
+git clone https://github.com/Sobhangh/BitflipDWN_Speech_Command.git
+cd BitflipDWN_Speech_Command
+python3 -m venv ~/venvs/torchenv
+source ~/venvs/torchenv/bin/activate
+pip install --upgrade pip
+pip install tqdm
+
+if cuda does not work use previous pytorhc version:
+
+pip uninstall torch torchvision torchaudio
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
+
+pip install setuptools wheel
+pip install -v --no-build-isolation ./DWN/
+
+
+python3 bitflip_exp.py > log.txt 2>&1
+tail -f log.txt
+
+    rm cifar_cnn.py
+    nano cifar_cnn.py
+    torchrun --nproc_per_node=2 cifar_cnn.py
+    python3 cifar_cnn.py > log.txt 2>&1
+    tail -f log.txt
+
+
+live check gpu usage:
+watch -n 1 nvidia-smi
+
+copy file:
+scp -i RL_CDLG_Hyperstack ubuntu@185.216.20.59:/home/ubuntu/BitflipDWN_Speech_Command/model.pt C:\Users\ghasob\ProjectCodes\BitflipDWN
+
+
+scp -i RL_CDLG_Hyperstack C:\Users\ghasob\ProjectCodes\BitflipDWN\data\cifar-10-python.tar.gz ubuntu@69.19.140.158:/home/ubuntu/BitflipDWN_Speech_Command/data 
+

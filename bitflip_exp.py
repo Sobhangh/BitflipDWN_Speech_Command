@@ -1,0 +1,466 @@
+import gc
+import sys
+sys.path.insert(0, './BitflipDWN_Speech_Command')
+import torch
+from torch.nn.functional import cross_entropy
+from tqdm import tqdm
+from torch import nn
+from torchvision import datasets, transforms
+from torch.utils.data import DataLoader
+import torch_dwn as dwn
+from tqdm import tqdm
+import random
+import os
+from types import SimpleNamespace
+from dsprites import CountingShapes, OrientationShapes, PairedShapes
+import copy
+import pandas as pd
+
+
+
+device = "cuda"
+BATCH_SIZE = 128
+scheduler = None
+
+
+def hardend_model(model):
+  lf_model = copy.deepcopy(model)
+  for layer_idx, layer in enumerate(lf_model):
+        if isinstance(layer, dwn.LUTLayer):
+          layer.luts.data = ((layer.luts.data > 0).float() * 2) - 1
+  return lf_model
+
+def evaluate(model, x_test, y_test):
+    model.eval()
+    with torch.no_grad():
+        pred = (model(x_test.cuda(device)).cpu()).argmax(dim=1).numpy()
+        acc = (pred == y_test.numpy()).sum() / y_test.shape[0]
+    return acc
+
+def train_and_evaluate(model, optimizer, x_train, y_train, x_test, y_test, epochs, batch_size):
+    n_samples = x_train.shape[0]
+
+    progress_bar = tqdm(range(epochs), desc="Training Progress")
+
+    for epoch in progress_bar:
+        model.train()
+        permutation = torch.randperm(n_samples)
+        correct_train = 0
+        total_train = 0
+
+        for i in range(0, n_samples, batch_size):
+            optimizer.zero_grad()
+
+            indices = permutation[i:i+batch_size]
+            batch_x, batch_y = x_train[indices].cuda(device), y_train[indices].cuda(device)
+
+            outputs = model(batch_x)
+            loss = cross_entropy(outputs, batch_y)
+            loss.backward()
+            optimizer.step()
+
+            pred_train = outputs.argmax(dim=1)
+
+            correct_train += (pred_train == batch_y).sum().item()
+            total_train += batch_y.size(0)
+
+        train_acc = correct_train / total_train
+
+        scheduler.step()
+
+        if epoch % 3 == 0:
+          test_acc = evaluate(model, x_test, y_test)
+          print(f'Epoch {epoch + 1}/{epochs}, Train Loss: {loss.item():.4f}, Train Accuracy: {train_acc:.4f}, Test Accuracy: {test_acc:.4f}')
+
+
+
+experiments_comb_temp = {
+    'mnist': [(4000,2),(4000,4),(4000,6),(16000,2),(1000,6)],
+    'ood': [(12000,4),(12000,6),(3000,6)]
+}
+
+experiment_comb = {
+    'mnist': experiments_comb_temp['mnist'],
+    'fmnist': experiments_comb_temp['mnist'],
+    'counting': experiments_comb_temp['ood'],
+    'orientation': experiments_comb_temp['ood'],
+    'orientation-2obj': experiments_comb_temp['ood'],
+}
+
+for k,v in experiment_comb.items():
+    for layer_size, lut_exponent in v:
+        args = {
+            'task': k,
+            'use_wandb': False, # Default for action='store_true' is False if not present
+            'seed': 453,
+            'batch_size': BATCH_SIZE,
+            'layer_size': layer_size,
+            'n': lut_exponent,
+            'tau_div': 0.07,
+            'lr': 0.01,
+            'step_size': 24,
+            'epochs': 50
+        }
+        args = SimpleNamespace(**args)
+        tau = 1 / args.tau_div
+
+        print("\n**********************************************************************")
+        print(f"Training started for {args.task} model with layer size {args.layer_size} and lut size {args.n} \n")
+
+        random.seed(args.seed)
+
+        # Load Data
+        transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Lambda(lambda x: torch.flatten(x))
+        ])
+
+        classes = 10
+        if args.task == 'mnist':
+            #epoch 30
+            train_dataset = datasets.MNIST(root='./data', train=True, download=True, transform=transform)
+            test_dataset = datasets.MNIST(root='./data', train=False, download=True, transform=transform)
+        elif args.task == 'fmnist':
+        #Epoch 50
+            train_dataset = datasets.FashionMNIST(root='./data', train=True, download=True, transform=transform)
+            test_dataset = datasets.FashionMNIST(root='./data', train=False, download=True, transform=transform)
+        else:
+            classes = 3
+            resolution=(64, 64)
+            out_size = args.layer_size
+            transformation = transforms.Compose([
+                transforms.Resize(resolution),
+                transforms.Lambda(lambda x: x.flatten())
+            ])
+
+            match args.task:
+                case 'counting':
+                    cls = CountingShapes
+                case 'orientation' | 'orientation-2obj':
+                    cls = OrientationShapes
+                case _:
+                    raise ValueError('Task is not implemented!')
+
+            all_data = cls.from_path(f'{args.task}-o3-128.npz', transforms=transformation)
+
+            generator = torch.Generator().manual_seed(args.seed)
+            train_dataset, test_dataset = torch.utils.data.random_split(all_data, [0.9, 0.1], generator=generator)
+
+            in_size = 3 * resolution[0] * resolution[1]
+
+
+        train_loader = DataLoader(dataset=train_dataset, batch_size=len(train_dataset), shuffle=True)
+        test_loader = DataLoader(dataset=test_dataset, batch_size=len(test_dataset), shuffle=False)
+
+        x_train, y_train = next(iter(train_loader))
+        x_test, y_test = next(iter(test_loader))
+        print("Shape of images")
+        print(x_train[0].shape)
+
+        # Binarize with distributive thermometer
+        thermometer = dwn.DistributiveThermometer(3).fit(x_train)
+        x_train = thermometer.binarize(x_train).flatten(start_dim=1)
+        x_test = thermometer.binarize(x_test).flatten(start_dim=1)
+
+
+        model = nn.Sequential(
+            dwn.LUTLayer(x_train.size(1), args.layer_size, n=args.n, mapping='learnable'),
+            dwn.LUTLayer(args.layer_size, args.layer_size // 2, n=args.n),
+            dwn.GroupSum(k=classes, tau=tau)
+        )
+
+        model = model.cuda()
+
+        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, gamma=0.1, step_size=args.step_size)
+
+        print(f"Model has {sum(p.numel() for p in model.parameters())} parameters.")
+        lut_size = 0
+        for layer_idx, layer in enumerate(model):
+                if isinstance(layer, dwn.LUTLayer):
+                    lut_size += layer.output_size * (2**args.n)
+        print(f"Model has {lut_size} lut entries")
+
+        train_and_evaluate(model, optimizer, x_train, y_train, x_test, y_test, epochs=args.epochs, batch_size=BATCH_SIZE)
+        save_dir = os.path.join(os.getcwd(), "models")
+        os.makedirs(save_dir, exist_ok=True)
+        model_path = os.path.join(save_dir, f"{args.task}_model_{args.n}_{args.layer_size}.pt")
+        torch.save(model.state_dict(), model_path) 
+
+        print("++++++++++++++++++ STARTING UNTARGETED BIT FLIP ATTACKS ++++++++++++++++++++++")
+
+        data_name = args.task
+        results_df = pd.DataFrame(columns=['batch_size', 'trial_number', 'base_acc', 'nb_flips', 'acc_hist', 'loss_hist', 'layer_hist' ])
+        base_acc = evaluate(model, x_test, y_test)
+        print(f"base acc: {base_acc}")
+        n_samples = x_test.shape[0]
+        print(f"number of test data: {n_samples}")
+        for batch_size in [256]: # 32,64,128,256,
+            #print(f"****************** New Batch size {batch_size} **********************")
+            for trial in range(5):
+                print("****** new trial ********")
+                permutation = torch.randperm(n_samples)
+                indices = permutation[:batch_size]
+                batch_x = x_test[indices].cuda(device)
+                batch_y = y_test[indices].cuda(device)
+                lf_model = hardend_model(model) #copy.deepcopy(model)
+                acc = evaluate(lf_model, x_test, y_test)
+                base_acc = acc
+                print(f"base accuracy: {acc}")
+                nb_flips = 0
+                acc_hist = [acc]
+                layer_hist = []
+                loss_hist = []
+                while acc > 0.01 + 1/classes :
+
+                    lf_model.train()
+                    lf_model.zero_grad()
+                    outputs = lf_model(batch_x)
+                    loss = cross_entropy(outputs, batch_y)
+                    loss.backward()
+                    loss_hist.append(loss.item())
+                    lf_model.eval()
+                    best_gradients = []
+                    for layer_idx, layer in enumerate(lf_model):
+                        if isinstance(layer, dwn.LUTLayer):
+                            grad_copy = torch.abs(layer.luts.grad.clone())
+                            while True:
+                                max_flat_index = torch.argmax(grad_copy)
+                                #max_flat_index = torch.randint(0, grad_copy.shape.prod(), (1,)).item()
+                                max_row, max_col = torch.unravel_index(max_flat_index, layer.luts.grad.shape)
+                                previous_weight = layer.luts.data[max_row, max_col]
+                                b = (previous_weight > 0)
+                                #Gradient ascent
+                                m = b ^ (layer.luts.grad[max_row, max_col] > 0)
+                                if not m:
+                                    grad_copy[max_row, max_col] = -torch.inf
+                                else:
+                                    b_hat = (float(b ^ m) * 2) - 1
+                                    #TO DO: What is the value of the truth table is it (0,1) or (-1,1)? if the former then b_hat = b^m
+                                    lf_model[layer_idx].luts.data[max_row, max_col] = b_hat
+                                    outputs = lf_model(batch_x)
+                                    flipped_loss = cross_entropy(outputs, batch_y).item()
+                                    best_gradients.append((layer_idx, max_row, max_col, flipped_loss, b_hat))
+                                    lf_model[layer_idx].luts.data[max_row, max_col] = previous_weight
+                                    break
+                            
+
+                    crossl = max(best_gradients, key=lambda x: x[3])
+                    lf_model[crossl[0]].luts.data[crossl[1], crossl[2]] = crossl[4]
+                    nb_flips += 1
+                    curr_acc = evaluate(lf_model, x_test, y_test)
+                    acc_hist.append(curr_acc)
+                    layer_hist.append(crossl[0])
+                    drop_acc = acc - curr_acc
+                    acc = curr_acc
+                    print(f"Batch size {batch_size}, trial {trial}; Bit flipped total {nb_flips}, loss {crossl[3]},{drop_acc}; accuracy {acc}, layer {crossl[0]}")
+                outputs = lf_model(batch_x)
+                loss_hist.append(cross_entropy(outputs, batch_y).item())
+                new_row_data = {
+                    'batch_size': batch_size,
+                    'trial_number': trial,
+                    'base_acc': base_acc,
+                    'nb_flips': nb_flips,
+                    'acc_hist': acc_hist,
+                    'loss_hist': loss_hist,
+                    'layer_hist': layer_hist,
+                }
+                results_df.loc[len(results_df)] = new_row_data
+        save_dir = os.path.join(os.getcwd(), "results")
+        os.makedirs(save_dir, exist_ok=True)
+        res_path = os.path.join(save_dir,f"bit_flip_untargeted_{data_name}_{args.n}_{args.layer_size}.csv")
+        results_df.to_csv(res_path, index=False)
+        print("Untargeted bit flip statistics saved!!")
+
+        if args.task in ['counting', 'orientation', 'orientation-2obj']:
+            print("SKIPPING TARGETED BIT FLIP ATTACKS FOR OOD DATASETS")
+            continue
+        print("++++++++++++++++++ STARTING TARGETED BIT FLIP ATTACKS ++++++++++++++++++++++")
+
+        batch_size = 256
+        data_name = args.task
+        results_df = pd.DataFrame(columns=['source', 'target_class', 'level', 'trial_number', 'base_acc', 'nb_flips', 'last_asr', 'last_ta', 'asr_hist', 'loss_hist', 'ta_hist', 'layer_hist'])
+        for level in range(1,4):
+            for target_class in range(0, classes):
+                for source in (range(0, classes) if level != 1 else [-1]):
+                    if source != target_class:
+                        print("**************************************************")
+                        print(f"source {source}, target {target_class}, level {level}")
+                        for trial in range(5):
+                            print("****** new trial ********")
+                            asr_hist = []
+                            layer_hist = []
+                            loss_hist = []
+                            ta_hist = []
+                            if level != 1:
+                                #source = 3
+                                x_test_source = x_test[y_test == source]
+                                perm = torch.randperm(x_test_source.shape[0])
+                                x_test_source_search = x_test_source[perm[:x_test_source.shape[0]//2]]
+                                x_test_source_eval = x_test_source[perm[x_test_source.shape[0]//2:]]
+                                print(f"size of source class {x_test_source.shape}")
+                                x_test_rest = x_test[y_test != source]
+                                y_test_rest = y_test[y_test != source]
+                                if level == 3:
+                                    rest_data_size = x_test_rest.shape[0]
+                                    perm = torch.randperm(rest_data_size)
+                                    rest_search_idx = perm[:x_test_source.shape[0]//2]
+                                    x_test_rest_search = x_test_rest[rest_search_idx]
+                                    y_test_rest_search = y_test_rest[rest_search_idx]
+                                    rest_eval_idx = perm[x_test_source.shape[0]//2:]
+                                    x_test_rest_eval = x_test_rest[rest_eval_idx]
+                                    y_test_rest_eval = y_test_rest[rest_eval_idx]
+                                    correct_idx = ~torch.isin(torch.arange(rest_data_size), rest_search_idx)
+                                    print(f"size of rest  {x_test_rest.shape}")
+                                    print(f"correct TA rest elems {correct_idx.sum().item()}")
+
+                            lf_model = hardend_model(model) #copy.deepcopy(model)
+                            base_acc = evaluate(lf_model, x_test, y_test)
+                            print(f"base acc: {base_acc}")
+                            acc = base_acc
+                            batch_size = 32
+                            nb_flips = 0
+                            n_samples = x_test.shape[0]
+                            print(f"number of test data: {n_samples}")
+
+
+                            asr_history = [-1] * 10
+                            #Stop should be used only once in a loop as it is stateful; TO DO: Make it stateless
+                            def stop_condition():
+                                asr_threshold = base_acc #0.99
+                                if level == 1:
+                                    acc_val = evaluate(lf_model, x_test, torch.full((n_samples,),target_class))
+                                    test_acc = None
+                                elif level == 2:
+                                    acc_val = evaluate(lf_model, x_test_source_eval, torch.full((x_test_source_eval.shape[0],),target_class))
+                                    test_acc = evaluate(lf_model, x_test_rest, y_test_rest)
+                                else:
+                                    acc_val = evaluate(lf_model, x_test_source_eval, torch.full((x_test_source_eval.shape[0],),target_class))
+                                    correct_idx = ~torch.isin(torch.arange(rest_data_size), rest_search_idx)
+                                    test_acc = evaluate(lf_model, x_test_rest[correct_idx], y_test_rest[correct_idx])
+                                asr_history.append(acc_val)
+                                asr_history.pop(0)
+                                if acc_val == 0:
+                                    stable = False
+                                else:
+                                    stable = sum([asr_history[i] == acc_val for i in range(len(asr_history))]) == len(asr_history)
+                                return acc_val < asr_threshold and not stable, acc_val, test_acc
+
+                            def get_loss():
+                                if level == 1:
+                                    perm1 = torch.randperm(x_test.shape[0])
+                                    batch_x  = x_test[perm1[:batch_size]].cuda(device)
+                                    batch_y = torch.full((batch_x.shape[0],),target_class).cuda(device)
+                                    outputs = lf_model(batch_x)
+                                    return cross_entropy(outputs, batch_y)
+                                elif level == 2:
+                                    batch_x, batch_y = x_test_source_search.cuda(device), torch.full((x_test_source_search.shape[0],),target_class).cuda(device)
+                                    outputs = lf_model(batch_x)
+                                    return cross_entropy(outputs, batch_y)
+                                else:
+                                    batch_x1, batch_y1 = x_test_source_search.cuda(device), torch.full((x_test_source_search.shape[0],),target_class).cuda(device)
+                                    batch_x2, batch_y2 = x_test_rest_search.cuda(device), y_test_rest_search.cuda(device)
+                                    outputs = lf_model(torch.cat((batch_x1,batch_x2), dim=0))
+                                    return cross_entropy(outputs, torch.cat((batch_y1,batch_y2), dim=0))
+                                
+
+
+                            continue_tbf = True
+                            while continue_tbf:
+                                lf_model.train()
+                                correct_train = 0
+                                total_train = 0
+                                lf_model.zero_grad()
+                                loss = get_loss()
+                                loss.backward()
+                                loss_hist.append(loss.item())
+
+                                lf_model.eval()
+                                best_gradients = []
+                                for layer_idx, layer in enumerate(lf_model):
+                                    if isinstance(layer, dwn.LUTLayer):
+                                        if layer.luts.grad is None:
+                                            continue # Skip if no gradients for this layer
+
+                                        grad_copy = torch.abs(layer.luts.grad.clone())
+                                        while True:
+                                            if grad_copy.max() == -torch.inf:
+                                                break # All values have been exhausted/marked as inf
+
+                                            max_flat_index = torch.argmax(grad_copy)
+                                            max_row, max_col = torch.unravel_index(max_flat_index, layer.luts.grad.shape)
+                                            previous_weight = layer.luts.data[max_row, max_col]
+                                            b = (previous_weight > 0)
+                                            
+                                            #Gradient descent
+                                            m = b ^ (layer.luts.grad[max_row, max_col] < 0)
+                                            
+                                            if not m:
+                                                grad_copy[max_row, max_col] = -torch.inf
+                                            else:
+                                                b_hat = (float(b ^ m) * 2) - 1
+
+                                                with torch.no_grad(): # Added no_grad context
+                                                    lf_model[layer_idx].luts.data[max_row, max_col] = b_hat
+
+                                                best_gradients.append((layer_idx, max_row, max_col, get_loss().item(), b_hat))
+
+                                                with torch.no_grad(): # Added no_grad context
+                                                    lf_model[layer_idx].luts.data[max_row, max_col] = previous_weight
+                                                break
+
+                                if not best_gradients: # Added check for empty best_gradients
+                                    print("No suitable bit flips found to decrease loss. Breaking loop.")
+                                    break
+
+                                crossl = min(best_gradients, key=lambda x: x[3])
+                                with torch.no_grad(): # Added no_grad context
+                                    lf_model[crossl[0]].luts.data[crossl[1], crossl[2]] = crossl[4]
+                                nb_flips += 1
+                                stop = stop_condition()
+                                acc_values = stop[1]
+                                continue_tbf = stop[0]
+                                asr_hist.append(acc_values)
+                                layer_hist.append(crossl[0])
+                                ta_hist.append(stop[2])
+                                print(f"Bit flipped total {nb_flips}, loss {crossl[3]}; asr {acc_values}, ta {stop[2]}, layer {crossl[0]}")
+
+                            loss_hist.append(get_loss())
+                            new_row_data = {
+                                'source': source,
+                                'target_class': target_class,
+                                'level': level,
+                                'trial_number': trial,
+                                'base_acc': base_acc,
+                                'nb_flips': nb_flips,
+                                'last_asr': asr_hist[-1],
+                                'last_ta' : ta_hist[-1],
+                                'asr_hist': asr_hist,
+                                'loss_hist': loss_hist,
+                                'ta_hist' : ta_hist,
+                                'layer_hist': layer_hist
+                            }
+                            results_df.loc[len(results_df)] = new_row_data
+
+        save_dir = os.path.join(os.getcwd(), "results")
+        os.makedirs(save_dir, exist_ok=True)
+        res_path = os.path.join(save_dir, f"bit_flip_targeted_{data_name}_{args.n}_{args.layer_size}.csv")
+        results_df.to_csv(res_path, index=False)
+        print("Untargeted stats saved!!")
+
+        del model, optimizer, scheduler
+        del train_loader, test_loader, test_dataset, train_dataset
+        if all_data:
+            del all_data
+        del x_train, y_train, x_test, y_test, thermometer
+        gc.collect()
+        torch.cuda.empty_cache()
+        print("Model and data deleted, cache cleared, moving to next experiment")
+
+
+
+
+
+
+
+                

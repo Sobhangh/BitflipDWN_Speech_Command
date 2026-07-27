@@ -67,9 +67,11 @@ class MLP(nn.Module):
 			BinaryLinear(input_dim, 1024, bias=False),
 			nn.BatchNorm1d(1024),
 			BinaryActivation(),
+			nn.Dropout(0.2),
 			BinaryLinear(1024, 1024, bias=False),
 			nn.BatchNorm1d(1024),
 			BinaryActivation(),
+			nn.Dropout(0.2),
 			BinaryLinear(1024, num_classes),
 		)
 
@@ -167,6 +169,52 @@ def evaluate(model, loader, criterion, device):
 	return running_loss / total, 100.0 * correct / total
 
 
+class BinaryVGG(nn.Module):
+	def __init__(self, in_channels: int, num_classes: int, base_channels: int = 128):
+		super().__init__()
+		c1 = base_channels
+		c2 = base_channels * 2
+		c3 = base_channels * 4
+		self.features = nn.Sequential(
+			# Block 1
+			BinaryConv2d(in_channels, c1, kernel_size=3, padding=1, bias=False),
+			nn.BatchNorm2d(c1),
+			BinaryActivation(),
+
+			BinaryConv2d(c1, c1, kernel_size=3, padding=1, bias=False),
+			nn.BatchNorm2d(c1),
+			BinaryActivation(),
+			nn.MaxPool2d(2),                        # → 128 × 16 × 16
+			# Block 2
+			BinaryConv2d(c1, c2, kernel_size=3, padding=1, bias=False),
+			nn.BatchNorm2d(c2),
+			BinaryActivation(),
+
+			BinaryConv2d(c2, c2, kernel_size=3, padding=1, bias=False),
+			nn.BatchNorm2d(c2),
+			BinaryActivation(),
+			nn.MaxPool2d(2),                        # → 256 × 8 × 8
+			# Block 3
+			BinaryConv2d(c2, c3, kernel_size=3, padding=1, bias=False),
+			nn.BatchNorm2d(c3),
+			BinaryActivation(),
+			nn.MaxPool2d(2),                        # → 512 × 4 × 4
+			nn.AdaptiveAvgPool2d((4, 4)),
+		)
+		self.classifier = nn.Sequential(
+			nn.Flatten(),
+			BinaryLinear(c3 * 4 * 4, 1024, bias=False),
+			nn.BatchNorm1d(1024),
+			BinaryActivation(),
+			BinaryLinear(1024, num_classes),
+			nn.BatchNorm1d(num_classes, affine=False),
+            nn.LogSoftmax(dim=1)
+		)
+
+	def forward(self, x: torch.Tensor) -> torch.Tensor:
+		return self.classifier(self.features(x))
+
+
 def main():
 	parser = argparse.ArgumentParser(description="PyTorch Binary Neural Network")
 	parser.add_argument("--dataset", type=str, default="mnist", choices=["mnist", "fashion-mnist", "cifar10"])
@@ -187,11 +235,11 @@ def main():
 		args.data_dir,
 		args.batch_size,
 	)
-
+	model = BinaryVGG(in_channels=1 if args.dataset in ["mnist", "fashion-mnist"] else 3, num_classes=classes).to(device)
 	model = MLP(input_dim=input_dim, num_classes=classes).to(device)
 	print(f"Model has {sum(p.numel() for p in model.parameters())} parameters.")
 	for module in model.modules():
-		if isinstance(module, BinaryLinear):
+		if isinstance(module, (BinaryLinear, BinaryConv2d)):
 			print(module.weight.shape)
 	criterion = nn.CrossEntropyLoss()
 	optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
