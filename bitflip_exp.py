@@ -80,7 +80,7 @@ experiments_comb_temp = {
 }
 
 experiment_comb = {
-    'mnist': experiments_comb_temp['mnist'],
+    'mnist': [(4000,4),(4000,6),(16000,2),(1000,6)],
     'fmnist': experiments_comb_temp['mnist'],
     'counting': experiments_comb_temp['ood'],
     'orientation': experiments_comb_temp['ood'],
@@ -118,7 +118,7 @@ for k,v in experiment_comb.items():
             transforms.ToTensor(),
             transforms.Lambda(lambda x: torch.flatten(x))
         ])
-
+        all_data = None
         classes = 10
         if args.task == 'mnist':
             #epoch 30
@@ -463,8 +463,7 @@ for k,v in experiment_comb.items():
 
         del model, optimizer, scheduler
         del train_loader, test_loader, test_dataset, train_dataset
-        if all_data:
-            del all_data
+        del all_data
         del x_train, y_train, x_test, y_test, thermometer
         del results_df
         gc.collect()
