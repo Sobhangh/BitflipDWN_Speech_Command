@@ -194,7 +194,7 @@ for k,v in experiment_comb.items():
         print("++++++++++++++++++ STARTING UNTARGETED BIT FLIP ATTACKS ++++++++++++++++++++++")
 
         data_name = args.task
-        results_df = pd.DataFrame(columns=['batch_size', 'trial_number', 'base_acc', 'nb_flips', 'acc_hist', 'loss_hist', 'layer_hist' ])
+        results_df = pd.DataFrame(columns=['batch_size', 'trial_number', 'base_acc', 'nb_flips'])
         base_acc = evaluate(model, x_test, y_test)
         print(f"base acc: {base_acc}")
         n_samples = x_test.shape[0]
@@ -264,14 +264,12 @@ for k,v in experiment_comb.items():
                     'batch_size': batch_size,
                     'trial_number': trial,
                     'base_acc': base_acc,
-                    'nb_flips': nb_flips,
-                    'acc_hist': acc_hist,
-                    'loss_hist': loss_hist,
-                    'layer_hist': layer_hist,
+                    'nb_flips': nb_flips
                 }
                 results_df.loc[len(results_df)] = new_row_data
                 del lf_model
                 del batch_x, batch_y
+                del acc_hist, layer_hist, loss_hist
                 gc.collect()
                 torch.cuda.empty_cache()
         save_dir = os.path.join(os.getcwd(), "results")
@@ -287,7 +285,7 @@ for k,v in experiment_comb.items():
 
         batch_size = 256
         data_name = args.task
-        results_df = pd.DataFrame(columns=['source', 'target_class', 'level', 'trial_number', 'base_acc', 'nb_flips', 'last_asr', 'last_ta', 'asr_hist', 'loss_hist', 'ta_hist', 'layer_hist'])
+        results_df = pd.DataFrame(columns=['source', 'target_class', 'level', 'trial_number', 'base_acc', 'nb_flips', 'last_asr', 'last_ta'])
         for level in range(1,4):
             for target_class in range(0, classes):
                 for source in (range(0, classes) if level != 1 else [-1]):
@@ -332,7 +330,7 @@ for k,v in experiment_comb.items():
                             print(f"number of test data: {n_samples}")
 
 
-                            asr_history = [-1] * 10
+                            asr_history = [-1] * 20
                             #Stop should be used only once in a loop as it is stateful; TO DO: Make it stateless
                             def stop_condition():
                                 asr_threshold = base_acc #0.99
@@ -443,13 +441,16 @@ for k,v in experiment_comb.items():
                                 'nb_flips': nb_flips,
                                 'last_asr': asr_hist[-1],
                                 'last_ta' : ta_hist[-1],
-                                'asr_hist': asr_hist,
-                                'loss_hist': loss_hist,
-                                'ta_hist' : ta_hist,
-                                'layer_hist': layer_hist
                             }
                             results_df.loc[len(results_df)] = new_row_data
                             del lf_model
+                            del asr_hist, layer_hist, loss_hist, ta_hist
+                            if level != 1:
+                                del x_test_source, x_test_source_search, x_test_source_eval
+                                del x_test_rest, y_test_rest
+                                if level == 3:
+                                    del x_test_rest_search, y_test_rest_search
+                                    del x_test_rest_eval, y_test_rest_eval
                             gc.collect()
                             torch.cuda.empty_cache()
 
