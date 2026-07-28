@@ -283,6 +283,7 @@ for k,v in experiment_comb.items():
             continue
         print("++++++++++++++++++ STARTING TARGETED BIT FLIP ATTACKS ++++++++++++++++++++++")
 
+        del results_df
         batch_size = 256
         data_name = args.task
         results_df = pd.DataFrame(columns=['source', 'target_class', 'level', 'trial_number', 'base_acc', 'nb_flips', 'last_asr', 'last_ta'])
@@ -465,6 +466,7 @@ for k,v in experiment_comb.items():
         if all_data:
             del all_data
         del x_train, y_train, x_test, y_test, thermometer
+        del results_df
         gc.collect()
         torch.cuda.empty_cache()
         print("Model and data deleted, cache cleared, moving to next experiment")

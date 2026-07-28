@@ -11,6 +11,9 @@ python3 -m venv ~/venvs/torchenv
 source ~/venvs/torchenv/bin/activate
 pip install --upgrade pip
 pip install tqdm
+pip install matplotlib
+pip install pandas
+
 
 if cuda does not work use previous pytorhc version:
 
