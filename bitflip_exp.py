@@ -12,7 +12,7 @@ from tqdm import tqdm
 import random
 import os
 from types import SimpleNamespace
-from dsprites import CountingShapes, OrientationShapes, PairedShapes
+from dsprites import CountingShapes, OrientationShapes
 import copy
 import pandas as pd
 
@@ -85,6 +85,10 @@ experiment_comb = {
     'counting': experiments_comb_temp['ood'],
     'orientation': experiments_comb_temp['ood'],
     'orientation-2obj': experiments_comb_temp['ood'],
+}
+
+experiment_comb = {
+    'counting': [(12000,6)]
 }
 
 for k,v in experiment_comb.items():
