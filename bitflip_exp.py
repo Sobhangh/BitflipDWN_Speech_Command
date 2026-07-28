@@ -87,9 +87,9 @@ experiment_comb = {
     'orientation-2obj': experiments_comb_temp['ood'],
 }
 
-experiment_comb = {
-    'counting': [(12000,6)]
-}
+# experiment_comb = {
+#     'counting': [(12000,6)]
+# }
 
 for k,v in experiment_comb.items():
     for layer_size, lut_exponent in v:
@@ -270,6 +270,10 @@ for k,v in experiment_comb.items():
                     'layer_hist': layer_hist,
                 }
                 results_df.loc[len(results_df)] = new_row_data
+                del lf_model
+                del batch_x, batch_y
+                gc.collect()
+                torch.cuda.empty_cache()
         save_dir = os.path.join(os.getcwd(), "results")
         os.makedirs(save_dir, exist_ok=True)
         res_path = os.path.join(save_dir,f"bit_flip_untargeted_{data_name}_{args.n}_{args.layer_size}.csv")
@@ -445,6 +449,9 @@ for k,v in experiment_comb.items():
                                 'layer_hist': layer_hist
                             }
                             results_df.loc[len(results_df)] = new_row_data
+                            del lf_model
+                            gc.collect()
+                            torch.cuda.empty_cache()
 
         save_dir = os.path.join(os.getcwd(), "results")
         os.makedirs(save_dir, exist_ok=True)
