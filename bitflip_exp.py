@@ -185,10 +185,12 @@ for k,v in experiment_comb.items():
                     lut_size += layer.output_size * (2**args.n)
         print(f"Model has {lut_size} lut entries")
 
-        train_and_evaluate(model, optimizer, x_train, y_train, x_test, y_test, epochs=args.epochs, batch_size=BATCH_SIZE)
         save_dir = os.path.join(os.getcwd(), "models")
         os.makedirs(save_dir, exist_ok=True)
         model_path = os.path.join(save_dir, f"{args.task}_model_{args.n}_{args.layer_size}.pt")
+         
+        train_and_evaluate(model, optimizer, x_train, y_train, x_test, y_test, epochs=args.epochs, batch_size=BATCH_SIZE)
+        
         torch.save(model.state_dict(), model_path) 
 
         print("++++++++++++++++++ STARTING UNTARGETED BIT FLIP ATTACKS ++++++++++++++++++++++")
@@ -325,6 +327,7 @@ for k,v in experiment_comb.items():
                             base_acc = evaluate(lf_model, x_test, y_test)
                             print(f"base acc: {base_acc}")
                             acc = base_acc
+                            #THIS IS USED FOR THE BATCH SIZE IN THE EXPERIMENTS FOR LEVEL 1 
                             batch_size = 32
                             nb_flips = 0
                             n_samples = x_test.shape[0]
