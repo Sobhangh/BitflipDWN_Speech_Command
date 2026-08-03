@@ -88,7 +88,7 @@ experiment_comb = {
 }
 
 # experiment_comb = {
-#     'counting': [(12000,6)]
+#     'orientation-2obj': [(3000,6)]
 # }
 
 for k,v in experiment_comb.items():

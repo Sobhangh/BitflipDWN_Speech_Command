@@ -388,6 +388,9 @@ for k,v in experiment_comb.items():
                     drop_acc = acc - curr_acc
                     acc = curr_acc
                     print(f"Batch size {batch_size}, trial {trial}; Bit flipped total {nb_flips}, loss {crossl[3]},{drop_acc}; accuracy {acc}, layer {crossl[0]}")
+                    if nb_flips >= 5000:  # Example condition to break the loop
+                        print(f"Reached maximum number of flips (5000).")
+                        break
                 outputs = lf_model(batch_x)
                 loss_hist.append(cross_entropy(outputs, batch_y).item())
                 new_row_data = {
@@ -565,7 +568,9 @@ for k,v in experiment_comb.items():
                                 layer_hist.append(crossl[0])
                                 ta_hist.append(stop[2])
                                 print(f"Bit flipped total {nb_flips}, loss {crossl[2]}; asr {acc_values}, ta {stop[2]}, layer {crossl[0]}")
-
+                                if nb_flips >= 5000:  # Example condition to break the loop
+                                    print(f"Reached maximum number of flips (5000).")
+                                    break
                             loss_hist.append(get_loss())
                             new_row_data = {
                                 'source': source,
