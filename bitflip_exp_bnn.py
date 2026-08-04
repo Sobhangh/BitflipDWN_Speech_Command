@@ -361,6 +361,8 @@ for k,v in experiment_comb.items():
                         if isinstance(layer, (BinaryLinear, BinaryConv2d)):
                             grad_copy = torch.abs(layer.weight.grad.clone())
                             while True:
+                                if grad_copy.max() == -torch.inf:
+                                    break # All values have been exhausted/marked as inf
                                 max_flat_index = torch.argmax(grad_copy)
                                 #max_flat_index = torch.randint(0, grad_copy.shape.prod(), (1,)).item()
                                 max_idx = torch.unravel_index(max_flat_index, layer.weight.grad.shape)
@@ -378,6 +380,9 @@ for k,v in experiment_comb.items():
                                     best_gradients.append((layer_idx, max_idx, flipped_loss, b_hat))
                                     lf_model.net[layer_idx].weight.data[max_idx] = previous_weight
                                     break
+                    if not best_gradients: # Added check for empty best_gradients
+                        print("No suitable bit flips found to decrease loss. Breaking loop.")
+                        break
                             
 
                     crossl = max(best_gradients, key=lambda x: x[2])
