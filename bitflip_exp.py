@@ -334,7 +334,7 @@ for k,v in experiment_comb.items():
                             print(f"number of test data: {n_samples}")
 
 
-                            asr_history = [-1] * 20
+                            asr_history = [-1] * 40
                             #Stop should be used only once in a loop as it is stateful; TO DO: Make it stateless
                             def stop_condition():
                                 asr_threshold = base_acc #0.99
@@ -353,7 +353,7 @@ for k,v in experiment_comb.items():
                                 if acc_val == 0:
                                     stable = False
                                 else:
-                                    stable = sum([asr_history[i] == acc_val for i in range(len(asr_history))]) == len(asr_history)
+                                    stable = sum([asr_history[i] == acc_val for i in range(len(asr_history))]) == (len(asr_history)//2)
                                 return acc_val < asr_threshold and not stable, acc_val, test_acc
 
                             def get_loss():

@@ -21,7 +21,7 @@ import pandas as pd
 device = "cuda"
 BATCH_SIZE = 128
 scheduler = None
-MAX_NB_FLIP  = 1500
+MAX_NB_FLIP  = 5000
 
 def hardend_model(model):
   lf_model = copy.deepcopy(model)
