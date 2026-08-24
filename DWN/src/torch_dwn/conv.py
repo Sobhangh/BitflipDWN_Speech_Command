@@ -13,7 +13,8 @@ class DWNConvLayer(torch.nn.Module):
 		kernels=32,
 		receptive_field=15,
 		stride=1,
-		groups=5,
+		channels_per_group=5,
+		padding=0,
 		ste=True,
 		flatten_output=True,
 		random_kernel_groups=False,
@@ -23,21 +24,23 @@ class DWNConvLayer(torch.nn.Module):
 	):
 		super().__init__()
 
+	
 		assert in_channels > 0
 		assert depth > 0
 		assert lut_rank > 0
 		assert kernels > 0
 		assert receptive_field > 0
 		assert stride > 0
-		assert groups > 0
-		assert in_channels % groups == 0
+		assert channels_per_group > 0
+		assert in_channels % channels_per_group == 0
+		assert isinstance(padding, (int, tuple))
 		assert isinstance(ste, bool)
 		assert isinstance(flatten_output, bool)
 		assert isinstance(random_kernel_groups, bool)
 		assert isinstance(learnable_connections, bool)
 		assert isinstance(debug, bool)
 		assert mapping_tau > 0
-		assert in_channels % groups == 0, "in_channels must be divisible by groups."
+		assert in_channels % channels_per_group == 0, "in_channels must be divisible by channels_per_group."
 		assert lut_rank ** depth <= receptive_field ** 2, "lut_rank^depth must be <= receptive_field^2 to fit in the convolution window."
 
 
@@ -47,7 +50,8 @@ class DWNConvLayer(torch.nn.Module):
 		self.kernels = int(kernels)
 		self.receptive_field = int(receptive_field)
 		self.stride = int(stride)
-		self.groups = int(groups)
+		self.channels_per_group = int(channels_per_group)
+		self.padding = self._to_pair(padding, "padding")
 		self.ste = ste
 		self.flatten_output = flatten_output
 		self.random_kernel_groups = random_kernel_groups
@@ -74,7 +78,7 @@ class DWNConvLayer(torch.nn.Module):
 			)
 			prev_nodes_per_kernel = nodes_per_kernel
 
-		self.channels_per_group = self.in_channels // self.groups
+		self.num_groups = self.in_channels // self.channels_per_group
 
 		# Kernel-to-group assignment remains fixed, but connection mappings are learnable.
 		self.register_buffer("kernel_groups", torch.empty(self.kernels, dtype=torch.int64), persistent=True)
@@ -97,6 +101,14 @@ class DWNConvLayer(torch.nn.Module):
 			self.register_buffer("Cw", torch.empty(self.kernels, self.leaf_size, dtype=torch.int64), persistent=True)
 
 		self.reset_parameters()
+
+	@staticmethod
+	def _to_pair(value, name):
+		if isinstance(value, int):
+			return (value, value)
+		if isinstance(value, tuple) and len(value) == 2 and all(isinstance(v, int) for v in value):
+			return value
+		raise ValueError(f"{name} must be an int or a tuple of 2 ints.")
 
 	def _debug(self, msg):
 		if self.debug:
@@ -127,7 +139,7 @@ class DWNConvLayer(torch.nn.Module):
 				indices = torch.arange(table_size, device=lut_layer.luts.device, dtype=torch.int64)
 				pass_through = ((indices & 1).float() * 2.0 - 1.0).unsqueeze(0)
 				random_luts = torch.rand_like(lut_layer.luts) * 2.0 - 1.0
-				use_pass_through = torch.rand(num_tables, 1, device=lut_layer.luts.device) < 0.9 #0.9
+				use_pass_through = torch.rand(num_tables, 1, device=lut_layer.luts.device) < 0.9 #0.06
 				lut_layer.luts.copy_(torch.where(use_pass_through, pass_through, random_luts))
 		self.regenerate_connections()
 		self._debug("reset_parameters done")
@@ -140,9 +152,9 @@ class DWNConvLayer(torch.nn.Module):
 	def regenerate_connections(self):
 		self._debug("regenerate_connections start")
 		if self.random_kernel_groups:
-			kernel_groups = torch.randint(0, self.groups, (self.kernels,), dtype=torch.int64)
+			kernel_groups = torch.randint(0, self.num_groups, (self.kernels,), dtype=torch.int64)
 		else:
-			kernel_groups = torch.arange(self.kernels, dtype=torch.int64) % self.groups
+			kernel_groups = torch.arange(self.kernels, dtype=torch.int64) % self.num_groups
 
 		self.kernel_groups.copy_(kernel_groups)
 
@@ -256,11 +268,13 @@ class DWNConvLayer(torch.nn.Module):
 		return leaves
 
 	def output_spatial_shape(self, height, width):
-		if height < self.receptive_field or width < self.receptive_field:
-			raise ValueError("Input spatial size must be >= receptive_field.")
+		effective_h = height + 2 * self.padding[0]
+		effective_w = width + 2 * self.padding[1]
+		if effective_h < self.receptive_field or effective_w < self.receptive_field:
+			raise ValueError("Input spatial size after padding must be >= receptive_field.")
 
-		out_h = 1 + (height - self.receptive_field) // self.stride
-		out_w = 1 + (width - self.receptive_field) // self.stride
+		out_h = 1 + (effective_h - self.receptive_field) // self.stride
+		out_w = 1 + (effective_w - self.receptive_field) // self.stride
 		return out_h, out_w
 
 	def _evaluate_tree(self, leaves):
@@ -290,7 +304,14 @@ class DWNConvLayer(torch.nn.Module):
 		if channels != self.in_channels:
 			raise ValueError(f"Expected {self.in_channels} channels but got {channels}.")
 
-		out_h, out_w = self.output_spatial_shape(height, width)
+		orig_h, orig_w = height, width
+		pad_h, pad_w = self.padding
+		if pad_h > 0 or pad_w > 0:
+			x = F.pad(x, (pad_w, pad_w, pad_h, pad_h), mode="constant", value=0.0)
+			self._debug(f"forward padded_x_shape={tuple(x.shape)}")
+
+		batch_size, channels, height, width = x.shape
+		out_h, out_w = self.output_spatial_shape(orig_h, orig_w)
 		self._debug(f"forward output_spatial_shape out_h={out_h}, out_w={out_w}")
 
 		if self.learnable_connections:
@@ -312,7 +333,7 @@ class DWNConvLayer(torch.nn.Module):
 		return (
 			f"in_channels={self.in_channels}, depth={self.depth}, lut_rank={self.lut_rank}, "
 			f"kernels={self.kernels}, receptive_field={self.receptive_field}, stride={self.stride}, "
-			f"groups={self.groups}, ste={self.ste}, flatten_output={self.flatten_output}, "
+			f"padding={self.padding}, channels_per_group={self.channels_per_group}, ste={self.ste}, flatten_output={self.flatten_output}, "
 			f"random_kernel_groups={self.random_kernel_groups}, learnable_connections={self.learnable_connections}, "
 			f"mapping_tau={self.mapping_tau}, debug={self.debug}"
 		)
@@ -360,3 +381,4 @@ class LogicalORPool2d(torch.nn.Module):
 
 	def extra_repr(self):
 		return f"kernel_size={self.kernel_size}, stride={self.stride}"
+

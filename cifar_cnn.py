@@ -1,3 +1,4 @@
+from DWN.src.torch_dwn.cifar_resnet_dwn import DWNResNetCIFAR
 import torch
 from torch import nn
 from torch.nn.functional import cross_entropy
@@ -215,6 +216,8 @@ model = nn.Sequential(
     dwn.LUTLayer(mlp_layer * 2, mlp_layer, n=4),
     dwn.GroupSum(k=10, tau=tau)
 )
+
+model = DWNResNetCIFAR()
 
 
 # mlp_layer = out_dim1 * out_dim1 * kernel1
