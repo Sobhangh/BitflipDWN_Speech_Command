@@ -1,4 +1,4 @@
-from DWN.src.torch_dwn.cifar_resnet_dwn import DWNResNetCIFAR
+from cifar_resnet_dwn import DWNResNetCIFAR
 import torch
 from torch import nn
 from torch.nn.functional import cross_entropy
@@ -196,26 +196,26 @@ test_loader = DataLoader(
 # )
 
 
-out_dim1 = 1 + (32 - 3)
-out_dim2 = 1 + (out_dim1 -3)
-out_dim3 = 1 + (out_dim2 -3)//2
-out_dim4 = 1 + (out_dim3 -3)//2
-out_dim5 = 1 + (out_dim4 -3)//2
-kernel1 = 64
-groupsNb = kernel1 // 4
-increase_factor = 4
-mlp_layer = out_dim5 * out_dim5 * kernel1 * (increase_factor ** 4)  #out_dim * out_dim * kernel1
-tau = (mlp_layer  / 10) / 100
-model = nn.Sequential(
-    dwn.DWNConvLayer(in_channels=3*therm_bits, groups=3, kernels=kernel1, depth=1, stride=1, receptive_field=3, flatten_output=False),
-    dwn.DWNConvLayer(in_channels=kernel1, groups=groupsNb, kernels=kernel1 * (increase_factor ** 1), depth=1, stride=1, receptive_field=3, flatten_output=False),
-    dwn.DWNConvLayer(in_channels=kernel1 * (increase_factor ** 1), groups=groupsNb * (increase_factor ** 1), kernels=kernel1 * (increase_factor ** 2), depth=1, stride=2, receptive_field=3, flatten_output=False),
-    dwn.DWNConvLayer(in_channels=kernel1 * (increase_factor ** 2), groups=groupsNb * (increase_factor ** 2), kernels=kernel1 * (increase_factor ** 3), depth=1, stride=2, receptive_field=3, flatten_output=False),
-    dwn.DWNConvLayer(in_channels=kernel1 * (increase_factor ** 3), groups=groupsNb * (increase_factor ** 3), kernels=kernel1 * (increase_factor ** 4), depth=1, stride=2, receptive_field=3, flatten_output=True),
-    dwn.LUTLayer(mlp_layer, mlp_layer * 2, n=4),
-    dwn.LUTLayer(mlp_layer * 2, mlp_layer, n=4),
-    dwn.GroupSum(k=10, tau=tau)
-)
+# out_dim1 = 1 + (32 - 3)
+# out_dim2 = 1 + (out_dim1 -3)
+# out_dim3 = 1 + (out_dim2 -3)//2
+# out_dim4 = 1 + (out_dim3 -3)//2
+# out_dim5 = 1 + (out_dim4 -3)//2
+# kernel1 = 64
+# groupsNb = kernel1 // 4
+# increase_factor = 4
+# mlp_layer = out_dim5 * out_dim5 * kernel1 * (increase_factor ** 4)  #out_dim * out_dim * kernel1
+# tau = (mlp_layer  / 10) / 100
+# model = nn.Sequential(
+#     dwn.DWNConvLayer(in_channels=3*therm_bits, groups=3, kernels=kernel1, depth=1, stride=1, receptive_field=3, flatten_output=False),
+#     dwn.DWNConvLayer(in_channels=kernel1, groups=groupsNb, kernels=kernel1 * (increase_factor ** 1), depth=1, stride=1, receptive_field=3, flatten_output=False),
+#     dwn.DWNConvLayer(in_channels=kernel1 * (increase_factor ** 1), groups=groupsNb * (increase_factor ** 1), kernels=kernel1 * (increase_factor ** 2), depth=1, stride=2, receptive_field=3, flatten_output=False),
+#     dwn.DWNConvLayer(in_channels=kernel1 * (increase_factor ** 2), groups=groupsNb * (increase_factor ** 2), kernels=kernel1 * (increase_factor ** 3), depth=1, stride=2, receptive_field=3, flatten_output=False),
+#     dwn.DWNConvLayer(in_channels=kernel1 * (increase_factor ** 3), groups=groupsNb * (increase_factor ** 3), kernels=kernel1 * (increase_factor ** 4), depth=1, stride=2, receptive_field=3, flatten_output=True),
+#     dwn.LUTLayer(mlp_layer, mlp_layer * 2, n=4),
+#     dwn.LUTLayer(mlp_layer * 2, mlp_layer, n=4),
+#     dwn.GroupSum(k=10, tau=tau)
+# )
 
 model = DWNResNetCIFAR()
 

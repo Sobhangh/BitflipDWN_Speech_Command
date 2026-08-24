@@ -1,10 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-from .conv import DWNConvLayer
-from .lut_layer import LUTLayer
-from .utils import GroupSum, STEFunction
+import torch_dwn as dwn
 
 
 class STEResidualAdd(nn.Module):
@@ -21,7 +18,7 @@ class STEResidualAdd(nn.Module):
 
         merged = x + residual
         merged = torch.clamp(merged, -1.0, 1.0)
-        out = STEFunction.apply(merged)
+        out = dwn.STEFunction.apply(merged)
         return out * 2.0 - 1.0
 
 
@@ -44,7 +41,7 @@ class DWNResidualBlock(nn.Module):
 
         pad = (receptive_field - 1) // 2
 
-        self.conv1 = DWNConvLayer(
+        self.conv1 = dwn.DWNConvLayer(
             in_channels=in_channels,
             depth=depth,
             lut_rank=lut_rank,
@@ -59,7 +56,7 @@ class DWNResidualBlock(nn.Module):
             learnable_connections=False,
             debug=debug,
         )
-        self.conv2 = DWNConvLayer(
+        self.conv2 = dwn.DWNConvLayer(
             in_channels=out_channels,
             depth=depth,
             lut_rank=lut_rank,
@@ -78,7 +75,7 @@ class DWNResidualBlock(nn.Module):
 
         self.shortcut = nn.Identity()
         if stride != 1 or in_channels != out_channels:
-            self.shortcut = DWNConvLayer(
+            self.shortcut = dwn.DWNConvLayer(
                 in_channels=in_channels,
                 depth=depth,
                 lut_rank=lut_rank,
@@ -103,7 +100,7 @@ class DWNResidualBlock(nn.Module):
 
 
 class DWNResNetCIFAR(nn.Module):
-    # CIFAR-10 input: [N, 3, 32, 32]
+    # CIFAR-10 input: [N, 9, 32, 32]
     # Stem:           [N, 32, 32, 32]
     # Block1:         [N, 32, 32, 32]
     # Block2:         [N, 64, 16, 16]   (stride=2 downsample)
@@ -116,8 +113,8 @@ class DWNResNetCIFAR(nn.Module):
         super().__init__()
 
         self.debug = debug
-        self.stem = DWNConvLayer(
-            in_channels=3,
+        self.stem = dwn.DWNConvLayer(
+            in_channels=9,
             depth=2,
             lut_rank=4,
             kernels=base_channels,
@@ -164,15 +161,15 @@ class DWNResNetCIFAR(nn.Module):
         )
 
         flat_dim = base_channels * 2 * 16 * 16
-        self.lut1 = LUTLayer(flat_dim, flat_dim // 2, n=4)
-        self.lut2 = LUTLayer(flat_dim // 2, flat_dim // 4, n=4)
-        self.classifier = GroupSum(k=num_classes, tau=1 / 0.1)
+        self.lut1 = dwn.LUTLayer(flat_dim, flat_dim // 2, n=4)
+        self.lut2 = dwn.LUTLayer(flat_dim // 2, flat_dim // 4, n=4)
+        self.classifier = dwn.GroupSum(k=num_classes, tau=1 / 0.1)
 
     def forward(self, x):
         if x.ndim != 4:
-            raise ValueError(f"Expected [N, C, H, W], got {tuple(x.shape)}")
-        if x.shape[1] != 3 or x.shape[2:] != (32, 32):
-            raise ValueError(f"Expected CIFAR-10 input [N, 3, 32, 32], got {tuple(x.shape)}")
+            raise ValueError(f"Expected CIFAR-10 input [N, 9, 32, 32], got {tuple(x.shape)}")
+        if x.shape[1] != 9 or x.shape[2:] != (32, 32):
+            raise ValueError(f"Expected CIFAR-10 input [N, 9, 32, 32], got {tuple(x.shape)}")
 
         x = self.stem(x)
         x = self.block1(x)
@@ -190,7 +187,7 @@ if __name__ == "__main__":
 
     model = DWNResNetCIFAR(num_classes=10)
     model = model.cuda()
-    x = torch.randn(2, 3, 32, 32, device='cuda')
+    x = torch.randn(2, 9, 32, 32, device='cuda')
     y = model(x)
     print(f"Input: {tuple(x.shape)}")
     print(f"Output: {tuple(y.shape)}")
