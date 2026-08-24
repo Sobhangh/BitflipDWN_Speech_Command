@@ -15,7 +15,8 @@ param_DWN_4_12000 = (2**4) * 12000 + (2**4) * 12000 * 0.5
 param_DWN_6_12000 = (2**6) * 12000 + (2**6) * 12000 * 0.5
 param_DWN_6_3000 = (2**6) * 3000 + (2**6) * 3000 * 0.5
 
-param_ConvBNN_5 = 1319453
+param_ConvBNN_5 = 1_319_453
+param_ConvBNN_64 = 17_338_307
 param_BNN_100 = 89810
 
 PARAM_MAP = {
@@ -28,6 +29,7 @@ PARAM_MAP = {
 	"DWN_6_12000": int(param_DWN_6_12000),
 	"DWN_6_3000": int(param_DWN_6_3000),
 	"ConvBNN_5": int(param_ConvBNN_5),
+	"ConvBNN_64": int(param_ConvBNN_64),
 	"BNN_100": int(param_BNN_100),
 }
 

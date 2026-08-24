@@ -8,7 +8,6 @@ from torch import nn
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader
 from torch.nn import functional as F
-import torch_dwn as dwn
 from tqdm import tqdm
 import random
 import os
@@ -235,7 +234,8 @@ experiment_comb = {
 
 for k,v in experiment_comb.items():
     layer_size = v
-    include_bn_list = [False] if k in ['mnist', 'fmnist'] else [True, False]
+    #Only the one without batchnorm is saved for o3 tasks
+    include_bn_list = [False] #if k in ['mnist', 'fmnist'] else [True, False]
     for include_bn in include_bn_list:
         args = {
             'task': k,
