@@ -16,7 +16,8 @@ from dsprites import CountingShapes, OrientationShapes
 import copy
 import pandas as pd
 
-
+#Note for using the convolution BNN for (f)mnist, first comment out the flatten in the transform
+#Then adjust the input to the "linear" layer of the BinaryVGG to 180
 device = "cuda"
 BATCH_SIZE = 128
 scheduler = None
