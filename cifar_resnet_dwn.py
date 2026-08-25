@@ -17,9 +17,9 @@ class STEResidualAdd(nn.Module):
             )
 
         merged = x + residual
-        merged = torch.clamp(merged, -1.0, 1.0)
+        #merged = torch.clamp(merged, -1.0, 1.0)
         out = dwn.STEFunction.apply(merged)
-        return out * 2.0 - 1.0
+        return out 
 
 
 class DWNResidualBlock(nn.Module):
@@ -57,6 +57,21 @@ class DWNResidualBlock(nn.Module):
             debug=debug,
         )
         self.conv2 = dwn.DWNConvLayer(
+            in_channels=in_channels,
+            depth=depth,
+            lut_rank=lut_rank,
+            kernels=out_channels,
+            receptive_field=receptive_field,
+            stride=1,
+            channels_per_group=channels_per_group,
+            padding=pad,
+            ste=True,
+            flatten_output=False,
+            random_kernel_groups=False,
+            learnable_connections=False,
+            debug=debug,
+        )
+        self.conv3 = dwn.DWNConvLayer(
             in_channels=out_channels,
             depth=depth,
             lut_rank=lut_rank,
@@ -73,43 +88,26 @@ class DWNResidualBlock(nn.Module):
         )
         self.residual_add = STEResidualAdd()
 
-        self.shortcut = nn.Identity()
-        if stride != 1 or in_channels != out_channels:
-            self.shortcut = dwn.DWNConvLayer(
-                in_channels=in_channels,
-                depth=depth,
-                lut_rank=lut_rank,
-                kernels=out_channels,
-                receptive_field=receptive_field,
-                stride=stride,
-                channels_per_group=channels_per_group,
-                padding=pad,
-                ste=True,
-                flatten_output=False,
-                random_kernel_groups=False,
-                learnable_connections=False,
-                debug=debug,
-            )
 
     def forward(self, x):
-        residual = self.shortcut(x)
-        out = self.conv1(x)
-        out = self.conv2(out)
+        #residual = x
+        residual = self.conv1(x)
+        out = self.conv2(residual)
+        out = self.conv3(out)
         out = self.residual_add(out, residual)
         return out
 
 
 class DWNResNetCIFAR(nn.Module):
     # CIFAR-10 input: [N, 9, 32, 32]
-    # Stem:           [N, 32, 32, 32]
-    # Block1:         [N, 32, 32, 32]
-    # Block2:         [N, 64, 16, 16]   (stride=2 downsample)
-    # Block3:         [N, 64, 16, 16]
-    # Flatten:        [N, 64 * 16 * 16]
+    # Stem:           [N, base_channels, 32, 32]
+    # Block1:         [N, base_channels * 2, 16, 16]   (stride=2 downsample)
+    # Block2:         [N, base_channels * 4, 8, 8]   (stride=2 downsample)
+    # Flatten:        [N, base_channels * 4 * 8 * 8]
     # LUT1:          [N, hidden]
     # LUT2:          [N, hidden]
     # GroupSum:      [N, 10]
-    def __init__(self, num_classes=10, base_channels=32, debug=False):
+    def __init__(self, num_classes=10, base_channels=64, debug=False):
         super().__init__()
 
         self.debug = debug
@@ -131,16 +129,6 @@ class DWNResNetCIFAR(nn.Module):
 
         self.block1 = DWNResidualBlock(
             in_channels=base_channels,
-            out_channels=base_channels,
-            stride=1,
-            depth=2,
-            lut_rank=4,
-            receptive_field=3,
-            channels_per_group=4,
-            debug=debug,
-        )
-        self.block2 = DWNResidualBlock(
-            in_channels=base_channels,
             out_channels=base_channels * 2,
             stride=2,
             depth=2,
@@ -149,10 +137,10 @@ class DWNResNetCIFAR(nn.Module):
             channels_per_group=4,
             debug=debug,
         )
-        self.block3 = DWNResidualBlock(
+        self.block2 = DWNResidualBlock(
             in_channels=base_channels * 2,
-            out_channels=base_channels * 2,
-            stride=1,
+            out_channels=base_channels * 4,
+            stride=2,
             depth=2,
             lut_rank=4,
             receptive_field=3,
@@ -160,9 +148,9 @@ class DWNResNetCIFAR(nn.Module):
             debug=debug,
         )
 
-        flat_dim = base_channels * 2 * 16 * 16
-        self.lut1 = dwn.LUTLayer(flat_dim, flat_dim // 2, n=4)
-        self.lut2 = dwn.LUTLayer(flat_dim // 2, flat_dim // 4, n=4)
+        flat_dim = base_channels * 4 * 8 * 8
+        self.lut1 = dwn.LUTLayer(flat_dim, flat_dim // 4, n=4)
+        #self.lut2 = dwn.LUTLayer(flat_dim // 2, flat_dim // 4, n=4)
         self.classifier = dwn.GroupSum(k=num_classes, tau=1 / 0.1)
 
     def forward(self, x):
@@ -174,10 +162,10 @@ class DWNResNetCIFAR(nn.Module):
         x = self.stem(x)
         x = self.block1(x)
         x = self.block2(x)
-        x = self.block3(x)
+        # x = self.block3(x)
         x = x.view(x.size(0), -1)
         x = self.lut1(x)
-        x = self.lut2(x)
+        #x = self.lut2(x)
         return self.classifier(x)
 
 
