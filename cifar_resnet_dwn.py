@@ -181,13 +181,14 @@ class DWNResNetCIFAR2(nn.Module):
         out_dim5 = 1 + (out_dim4 -3)//2
         mlp_layer = out_dim5 * out_dim5 * kernel1 * (increase_factor ** 4)
         tau = (mlp_layer  / 10) / 100
-        
+        self.residual_add = STEResidualAdd()
+
         self.conv1 = dwn.DWNConvLayer(in_channels=9, channels_per_group=3, kernels=kernel1, depth=1, stride=1, receptive_field=3, flatten_output=False)
         self.conv2 = dwn.DWNConvLayer(in_channels=kernel1, channels_per_group=groupsNb, kernels=kernel1 * (increase_factor ** 1), depth=1, stride=1, receptive_field=3, flatten_output=False)
         self.conv3 = dwn.DWNConvLayer(in_channels=kernel1 * (increase_factor ** 1), channels_per_group=groupsNb, kernels=kernel1 * (increase_factor ** 2), depth=1, stride=2, receptive_field=3, flatten_output=False)
         self.conv4 = dwn.DWNConvLayer(in_channels=kernel1 * (increase_factor ** 2), channels_per_group=groupsNb, kernels=kernel1 * (increase_factor ** 3), depth=1, stride=2, receptive_field=3, flatten_output=False)
         self.conv5 = dwn.DWNConvLayer(in_channels=kernel1 * (increase_factor ** 3), channels_per_group=groupsNb, kernels=kernel1 * (increase_factor ** 4), depth=1, stride=2, receptive_field=3, flatten_output=True)
-        self.resid = dwn.DWNConvLayer(in_channels=9, channels_per_group=groupsNb, kernels=kernel1 * (increase_factor ** 4), depth=2, stride=1, receptive_field=32-(out_dim5-1), flatten_output=True)
+        self.resid = dwn.DWNConvLayer(in_channels=9, channels_per_group=3, kernels=kernel1 * (increase_factor ** 4), depth=2, stride=1, receptive_field=32-(out_dim5-1), flatten_output=True)
         self.lut1 = dwn.LUTLayer(mlp_layer, mlp_layer // 4, n=4)
         #self.lut2 = dwn.LUTLayer(mlp_layer * 2, mlp_layer, n=4)
         self.group_sum = dwn.GroupSum(k=10, tau=tau)
@@ -204,7 +205,7 @@ class DWNResNetCIFAR2(nn.Module):
         x = self.conv4(x)
         x = self.conv5(x)
         residual = self.resid(input)
-        x = self.residual_add(x, residual)
+        x = self.residual_add(x, residual * 0.5)
         x = self.lut1(x)
         #x = self.lut2(x)
         return self.group_sum(x)
