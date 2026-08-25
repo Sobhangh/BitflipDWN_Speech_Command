@@ -389,4 +389,15 @@ Training Progress:  18%|██████████▌                       
 
 Notice the train accuracy in the first one is almost 100 while in second one it is around 44
 There seems to be not much improvement with increasing Kernel number
+
+DWNResnetCIFAR2 with 5 layers and kernel=32
+Training Progress:   0% 0/150 [00:00<?, ?it/s]Epoch 1/150, Train Loss: 1.7948, Train Accuracy: 0.2803, Test Accuracy: 0.3622
+Training Progress:   7% 10/150 [09:45<2:16:25, 58.47s/it]Epoch 11/150, Train Loss: 0.9427, Train Accuracy: 0.7504, Test Accuracy: 0.5369
+Training Progress:  13% 20/150 [19:31<2:06:47, 58.52s/it]Epoch 21/150, Train Loss: 0.8384, Train Accuracy: 0.7974, Test Accuracy: 0.5419
+Training Progress:  20% 30/150 [29:17<1:56:59, 58.50s/it]Epoch 31/150, Train Loss: 0.8758, Train Accuracy: 0.7920, Test Accuracy: 0.5400
+Training Progress:  27% 40/150 [39:03<1:47:19, 58.54s/it]Epoch 41/150, Train Loss: 0.8741, Train Accuracy: 0.7856, Test Accuracy: 0.5333
+Training Progress:  33% 50/150 [48:50<1:37:33, 58.54s/it]Epoch 51/150, Train Loss: 0.9635, Train Accuracy: 0.7698, Test Accuracy: 0.5269
+Training Progress:  34% 51/150 [50:27<1:37:57, 59.37s/it]
+
+The performance does improve by like 5% but not enough
 """
