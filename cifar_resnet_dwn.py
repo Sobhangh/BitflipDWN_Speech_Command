@@ -184,9 +184,9 @@ class DWNResNetCIFAR2(nn.Module):
         self.conv2 = dwn.DWNConvLayer(in_channels=kernel1, channels_per_group=groupsNb, kernels=kernel1 * (increase_factor ** 1), depth=1, stride=1, receptive_field=3, flatten_output=False)
         self.conv3 = dwn.DWNConvLayer(in_channels=kernel1 * (increase_factor ** 1), channels_per_group=groupsNb, kernels=kernel1 * (increase_factor ** 2), depth=1, stride=2, receptive_field=3, flatten_output=False)
         self.conv4 = dwn.DWNConvLayer(in_channels=kernel1 * (increase_factor ** 2), channels_per_group=groupsNb, kernels=kernel1 * (increase_factor ** 3), depth=1, stride=2, receptive_field=3, flatten_output=False)
-        self.conv5 = dwn.DWNConvLayer(in_channels=kernel1 * (increase_factor ** 3), channels_per_group=groupsNb, kernels=kernel1 * (increase_factor ** 4), depth=1, stride=2, receptive_field=3, flatten_output=True)
-        self.resid = dwn.DWNConvLayer(in_channels=9, channels_per_group=3, kernels=kernel1 * (increase_factor ** 4), depth=2, stride=1, receptive_field=32-(out_dim5-1), flatten_output=True)
-        self.resid2 = dwn.DWNConvLayer(in_channels=kernel1 * (increase_factor ** 1), channels_per_group=groupsNb, kernels=kernel1 * (increase_factor ** 4), depth=2, stride=1, receptive_field=out_dim2-(out_dim5-1), flatten_output=True)
+        self.conv5 = dwn.DWNConvLayer(in_channels=kernel1 * (increase_factor ** 3), channels_per_group=groupsNb, kernels=kernel1 * (increase_factor ** 4), depth=1, stride=2, receptive_field=3, flatten_output=True, ste=False)
+        self.resid = dwn.DWNConvLayer(in_channels=9, channels_per_group=3, kernels=kernel1 * (increase_factor ** 4), depth=2, stride=1, receptive_field=32-(out_dim5-1), flatten_output=True, ste=False)
+        self.resid2 = dwn.DWNConvLayer(in_channels=kernel1 * (increase_factor ** 1), channels_per_group=groupsNb, kernels=kernel1 * (increase_factor ** 4), depth=2, stride=1, receptive_field=out_dim2-(out_dim5-1), flatten_output=True, ste=False)
 
         self.lut1 = dwn.LUTLayer(mlp_layer, mlp_layer // 4, n=4)
         #self.lut2 = dwn.LUTLayer(mlp_layer * 2, mlp_layer, n=4)
