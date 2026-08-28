@@ -10,16 +10,13 @@ class STEResidualAdd(nn.Module):
     def __init__(self):
         super().__init__()
 
-    def forward(self, x, residual):
-        if x.shape != residual.shape:
-            raise ValueError(
-                f"Residual shape mismatch: x={tuple(x.shape)}, residual={tuple(residual.shape)}"
-            )
-
-        merged = x + residual
+    def forward(self, x, weight=0.5, *residual):
+        merged = x
+        for res in residual:
+            merged += weight * res
         #merged = torch.clamp(merged, -1.0, 1.0)
         out = dwn.STEFunction.apply(merged)
-        return out 
+        return out
 
 
 class DWNResidualBlock(nn.Module):
@@ -189,6 +186,8 @@ class DWNResNetCIFAR2(nn.Module):
         self.conv4 = dwn.DWNConvLayer(in_channels=kernel1 * (increase_factor ** 2), channels_per_group=groupsNb, kernels=kernel1 * (increase_factor ** 3), depth=1, stride=2, receptive_field=3, flatten_output=False)
         self.conv5 = dwn.DWNConvLayer(in_channels=kernel1 * (increase_factor ** 3), channels_per_group=groupsNb, kernels=kernel1 * (increase_factor ** 4), depth=1, stride=2, receptive_field=3, flatten_output=True)
         self.resid = dwn.DWNConvLayer(in_channels=9, channels_per_group=3, kernels=kernel1 * (increase_factor ** 4), depth=2, stride=1, receptive_field=32-(out_dim5-1), flatten_output=True)
+        self.resid2 = dwn.DWNConvLayer(in_channels=kernel1 * (increase_factor ** 1), channels_per_group=groupsNb, kernels=kernel1 * (increase_factor ** 4), depth=2, stride=1, receptive_field=out_dim2-(out_dim5-1), flatten_output=True)
+
         self.lut1 = dwn.LUTLayer(mlp_layer, mlp_layer // 4, n=4)
         #self.lut2 = dwn.LUTLayer(mlp_layer * 2, mlp_layer, n=4)
         self.group_sum = dwn.GroupSum(k=10, tau=tau)
@@ -198,14 +197,14 @@ class DWNResNetCIFAR2(nn.Module):
             raise ValueError(f"Expected CIFAR-10 input [N, 9, 32, 32], got {tuple(x.shape)}")
         if x.shape[1] != 9 or x.shape[2:] != (32, 32):
             raise ValueError(f"Expected CIFAR-10 input [N, 9, 32, 32], got {tuple(x.shape)}")
-        input = x
+        res = self.resid(x)
         x = self.conv1(x)
         x = self.conv2(x)
+        res2 = self.resid2(x)
         x = self.conv3(x)
         x = self.conv4(x)
         x = self.conv5(x)
-        residual = self.resid(input)
-        x = self.residual_add(x, residual * 0.5)
+        x = self.residual_add(x, res, res2)
         x = self.lut1(x)
         #x = self.lut2(x)
         return self.group_sum(x)
