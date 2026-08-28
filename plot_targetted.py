@@ -13,7 +13,10 @@ param_DWN_2_16000 = (2**2) * 16000 + (2**2) * 16000 * 0.5
 param_DWN_6_1000 = (2**6) * 1000 + (2**6) * 1000 * 0.5
 
 param_ConvBNN_5 = 1319453
+param_ConvBNN_64 = 17_338_307
 param_BNN_100 = 89810
+param_BNN_100_6 = 120410  
+
 
 PARAM_MAP = {
 	"DWN_2_4000": int(param_DWN_2_4000),
@@ -22,7 +25,9 @@ PARAM_MAP = {
 	"DWN_2_16000": int(param_DWN_2_16000),
 	"DWN_6_1000": int(param_DWN_6_1000),
 	"ConvBNN_5": int(param_ConvBNN_5),
+	"ConvBNN_64": int(param_ConvBNN_64),
 	"BNN_100": int(param_BNN_100),
+	"BNN_100_6": int(param_BNN_100_6),
 }
 
 
@@ -37,9 +42,13 @@ def parse_targeted_filename(file_path: Path) -> dict[str, str | int | None]:
 	marker = stem_parts[3]
 	if marker in {"BNN", "ConvBNN"}:
 		task = stem_parts[4]
-		layer_size = int(stem_parts[5])
-		model_type = marker
-		param_key = f"{marker}_{layer_size}"
+		layer_tokens = stem_parts[5:]
+		layer_size = int(layer_tokens[0])
+		if marker == "BNN":
+			model_type = "BNN (3 layers)" if len(layer_tokens) == 1 else f"BNN ({layer_tokens[-1]} layers)"
+		else:
+			model_type = f"ConvBNN ({layer_size})"
+		param_key = f"{marker}_{'_'.join(layer_tokens)}"
 		lut_rank = None
 	else:
 		task = marker

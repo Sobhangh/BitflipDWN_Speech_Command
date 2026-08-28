@@ -18,6 +18,8 @@ param_DWN_6_3000 = (2**6) * 3000 + (2**6) * 3000 * 0.5
 param_ConvBNN_5 = 1_319_453
 param_ConvBNN_64 = 17_338_307
 param_BNN_100 = 89810
+param_BNN_100_6 = 120410 
+#parameter of conv 5 on (f)mnist is 200138 
 
 PARAM_MAP = {
 	"DWN_2_4000": int(param_DWN_2_4000),
@@ -31,6 +33,7 @@ PARAM_MAP = {
 	"ConvBNN_5": int(param_ConvBNN_5),
 	"ConvBNN_64": int(param_ConvBNN_64),
 	"BNN_100": int(param_BNN_100),
+	"BNN_100_6": int(param_BNN_100_6),
 }
 
 MAX_NB_FLIP = 5000
@@ -46,9 +49,13 @@ def parse_untargeted_filename(file_path: Path) -> dict[str, str | int]:
 	marker = stem_parts[3]
 	if marker in {"BNN", "ConvBNN"}:
 		task = stem_parts[4]
-		layer_size = int(stem_parts[5])
-		model_type = marker
-		param_key = f"{marker}_{layer_size}"
+		layer_tokens = stem_parts[5:]
+		layer_size = int(layer_tokens[0])
+		if marker == "BNN":
+			model_type = "BNN (3 layers)" if len(layer_tokens) == 1 else f"BNN ({layer_tokens[-1]} layers)"
+		else:
+			model_type = f"ConvBNN ({layer_size})"
+		param_key = f"{marker}_{'_'.join(layer_tokens)}"
 		lut_rank = None
 	else:
 		task = marker
@@ -90,9 +97,9 @@ def model_sort_key(model_type: str) -> tuple[int, int]:
 	if model_type.startswith("DWN"):
 		rank = int(model_type.split("=")[1].rstrip(")"))
 		return (0, rank)
-	if model_type == "BNN":
+	if model_type.startswith("BNN"):
 		return (1, 0)
-	if model_type == "ConvBNN":
+	if model_type.startswith("ConvBNN"):
 		return (2, 0)
 	return (3, 0)
 
