@@ -166,27 +166,33 @@ class DWNResNetCIFAR(nn.Module):
         return self.classifier(x)
 
 class DWNResNetCIFAR2(nn.Module):
-    def __init__(self, num_classes=10, kernel1=32, debug=False):  
+    def __init__(self, num_classes=10, kernel1=24, debug=False):  
         super().__init__()
         self.debug = debug
         increase_factor = 4
         groupsNb = 8
-        out_dim1 = 1 + (32 - 3)
-        out_dim2 = 1 + (out_dim1 -3)
-        out_dim3 = 1 + (out_dim2 -3)//2
-        out_dim4 = 1 + (out_dim3 -3)//2
-        out_dim5 = 1 + (out_dim4 -3)//2
-        mlp_layer = out_dim5 * out_dim5 * kernel1 * (increase_factor ** 4)
+        out_dim1 = 1 + (32 - 5)
+        out_dim2 = 1 + (out_dim1 -5)
+        out_dim3 = 1 + (out_dim2 -4)//3 # =7
+        out_dim4 = 1 + (out_dim3 -4)//3 # =2
+
+        # out_dim1 = 1 + (32 - 3)
+        # out_dim2 = 1 + (out_dim1 -3)
+        # out_dim3 = 1 + (out_dim2 -3)//2
+        # out_dim4 = 1 + (out_dim3 -3)//2
+        # out_dim5 = 1 + (out_dim4 -3)//2
+        last_dim = out_dim4
+        mlp_layer = last_dim * last_dim * kernel1 * (increase_factor ** 3)
         tau = (mlp_layer  / 10) / 100
         self.residual_add = STEResidualAdd()
 
-        self.conv1 = dwn.DWNConvLayer(in_channels=9, channels_per_group=3, kernels=kernel1, depth=1, stride=1, receptive_field=3, flatten_output=False)
-        self.conv2 = dwn.DWNConvLayer(in_channels=kernel1, channels_per_group=groupsNb, kernels=kernel1 * (increase_factor ** 1), depth=1, stride=1, receptive_field=3, flatten_output=False)
-        self.conv3 = dwn.DWNConvLayer(in_channels=kernel1 * (increase_factor ** 1), channels_per_group=groupsNb, kernels=kernel1 * (increase_factor ** 2), depth=1, stride=2, receptive_field=3, flatten_output=False)
-        self.conv4 = dwn.DWNConvLayer(in_channels=kernel1 * (increase_factor ** 2), channels_per_group=groupsNb, kernels=kernel1 * (increase_factor ** 3), depth=1, stride=2, receptive_field=3, flatten_output=False)
-        self.conv5 = dwn.DWNConvLayer(in_channels=kernel1 * (increase_factor ** 3), channels_per_group=groupsNb, kernels=kernel1 * (increase_factor ** 4), depth=1, stride=2, receptive_field=3, flatten_output=True, ste=False)
-        self.resid = dwn.DWNConvLayer(in_channels=9, channels_per_group=3, kernels=kernel1 * (increase_factor ** 4), depth=2, stride=1, receptive_field=32-(out_dim5-1), flatten_output=True, ste=False)
-        self.resid2 = dwn.DWNConvLayer(in_channels=kernel1 * (increase_factor ** 1), channels_per_group=groupsNb, kernels=kernel1 * (increase_factor ** 4), depth=2, stride=1, receptive_field=out_dim2-(out_dim5-1), flatten_output=True, ste=False)
+        self.conv1 = dwn.DWNConvLayer(in_channels=9, channels_per_group=3, kernels=kernel1, depth=2, stride=1, receptive_field=5, flatten_output=False)
+        self.conv2 = dwn.DWNConvLayer(in_channels=kernel1, channels_per_group=groupsNb, kernels=kernel1 * (increase_factor ** 1), depth=2, stride=1, receptive_field=5, flatten_output=False)
+        self.conv3 = dwn.DWNConvLayer(in_channels=kernel1 * (increase_factor ** 1), channels_per_group=groupsNb, kernels=kernel1 * (increase_factor ** 2), depth=2, stride=3, receptive_field=4, flatten_output=False)
+        self.conv4 = dwn.DWNConvLayer(in_channels=kernel1 * (increase_factor ** 2), channels_per_group=groupsNb, kernels=kernel1 * (increase_factor ** 3), depth=2, stride=3, receptive_field=4, flatten_output=True, ste=False)
+        #self.conv5 = dwn.DWNConvLayer(in_channels=kernel1 * (increase_factor ** 3), channels_per_group=groupsNb, kernels=kernel1 * (increase_factor ** 4), depth=2, stride=2, receptive_field=3, flatten_output=True, ste=False)
+        self.resid = dwn.DWNConvLayer(in_channels=9, channels_per_group=3, kernels=kernel1 * (increase_factor ** 4), depth=2, stride=1, receptive_field=32-(last_dim-1), flatten_output=True, ste=False)
+        self.resid2 = dwn.DWNConvLayer(in_channels=kernel1 * (increase_factor ** 1), channels_per_group=groupsNb, kernels=kernel1 * (increase_factor ** 3), depth=2, stride=1, receptive_field=out_dim2-(last_dim-1), flatten_output=True, ste=False)
 
         self.lut1 = dwn.LUTLayer(mlp_layer, mlp_layer // 4, n=4)
         #self.lut2 = dwn.LUTLayer(mlp_layer * 2, mlp_layer, n=4)
@@ -197,14 +203,14 @@ class DWNResNetCIFAR2(nn.Module):
             raise ValueError(f"Expected CIFAR-10 input [N, 9, 32, 32], got {tuple(x.shape)}")
         if x.shape[1] != 9 or x.shape[2:] != (32, 32):
             raise ValueError(f"Expected CIFAR-10 input [N, 9, 32, 32], got {tuple(x.shape)}")
-        res = self.resid(x)
+        #res = self.resid(x)
         x = self.conv1(x)
         x = self.conv2(x)
         res2 = self.resid2(x)
         x = self.conv3(x)
         x = self.conv4(x)
-        x = self.conv5(x)
-        x = self.residual_add(x, res, res2)
+        #x = self.conv5(x)
+        x = self.residual_add(x, res2)
         x = self.lut1(x)
         #x = self.lut2(x)
         return self.group_sum(x)
