@@ -1,4 +1,4 @@
-from cifar_resnet_dwn import DWNResNetCIFAR, DWNResNetCIFAR2
+from cifar_resnet_dwn import DWNResNetCIFAR, DWNResNetCIFAR2, DWNResNetCIFAREnsemble
 import torch
 from torch import nn
 from torch.nn.functional import cross_entropy
@@ -217,7 +217,7 @@ test_loader = DataLoader(
 #     dwn.GroupSum(k=10, tau=tau)
 # )
 
-model = DWNResNetCIFAR2()
+model = DWNResNetCIFAREnsemble()
 
 
 # mlp_layer = out_dim1 * out_dim1 * kernel1
