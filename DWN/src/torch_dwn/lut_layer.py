@@ -62,7 +62,7 @@ class LUTLayer(torch.nn.Module):
             self.mapping = torch.nn.Parameter(layer_mapping(input_size, n, output_size, random=(mapping=='random')), requires_grad=False)
         
         # LUTs
-        luts = torch.zeros(output_size, 2**n, dtype=torch.float32) - 1 #torch.rand(output_size, 2**n, dtype=torch.float32)*2 - 1
+        luts = torch.zeros(output_size, 2**n, dtype=torch.float32)  #torch.rand(output_size, 2**n, dtype=torch.float32)*2 - 1
         self.luts = torch.nn.Parameter(luts, requires_grad=True)
         
     def forward(self, x):
