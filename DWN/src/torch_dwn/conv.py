@@ -38,7 +38,7 @@ class DWNConvLayer(torch.nn.Module):
 		assert isinstance(debug, bool)
 		assert mapping_tau > 0
 		assert in_channels % groups == 0, "in_channels must be divisible by groups."
-		assert lut_rank ** depth <= receptive_field ** 2, "lut_rank^depth must be <= receptive_field^2 to fit in the convolution window."
+		assert lut_rank ** depth <= receptive_field ** 2 * (in_channels // groups), "lut_rank^depth must be <= receptive_field^2 * channels_per_group to fit in the convolution window."
 
 
 		self.in_channels = int(in_channels)

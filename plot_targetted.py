@@ -133,79 +133,94 @@ def aggregate_pair_metrics(pair_data: dict[str, list[float]]) -> dict[str, float
 
 
 def save_level1_table(
-	stem: str,
 	task: str,
-	model_type: str,
-	parameters: int,
-	base_acc: float,
-	level_data: dict[tuple[int, int], dict[str, list[float]]],
+	rows: list[dict[str, str | int | float]],
 	report_dir: Path,
 ) -> None:
-	nb_row: list[str] = []
-	asr_row: list[str] = []
+	headers = ["Configuration", "# Parameters", "Base Accuracy"] + [f"T{target}" for target in range(10)]
+	table_data = []
+	for row in rows:
+		table_data.append(
+			[
+				str(row["model_type"]),
+				f"{int(row['parameters']):,}",
+				f"{float(row['base_acc']):.4f}",
+			]
+			+ [str(row[f"t{target}"]) for target in range(10)]
+		)
 
-	for target in range(10):
-		pair = level_data.get((-1, target))
-		if pair is None:
-			nb_row.append("N/A")
-			asr_row.append("N/A")
-			continue
-
-		agg = aggregate_pair_metrics(pair)
-		nb_mean = agg["nb_mean"]
-		nb_std = agg["nb_std"]
-		asr_mean = agg["asr_mean"]
-
-		if np.isnan(nb_mean):
-			nb_row.append("N/A")
-		else:
-			nb_row.append(f"{nb_mean:.1f} +/- {nb_std:.1f}")
-
-		if np.isnan(asr_mean):
-			asr_row.append("N/A")
-		else:
-			asr_row.append(f"{asr_mean:.4f}")
-
-	fig, ax = plt.subplots(figsize=(15, 3.8))
+	fig_height = max(2.8, 1.0 + 0.48 * len(table_data))
+	fig, ax = plt.subplots(figsize=(19, fig_height))
 	ax.axis("off")
-
-	col_labels = [str(i) for i in range(10)]
-	row_labels = ["nb_flips mean +/- std", "mean last_asr"]
-	table_data = [nb_row, asr_row]
 
 	table = ax.table(
 		cellText=table_data,
-		rowLabels=row_labels,
-		colLabels=col_labels,
+		colLabels=headers,
 		loc="center",
 		cellLoc="center",
 		colLoc="center",
 	)
 	table.auto_set_font_size(False)
-	table.set_fontsize(10)
-	table.scale(1, 1.6)
+	table.set_fontsize(9.4)
+	table.scale(1, 1.35)
 
 	for (row_idx, col_idx), cell in table.get_celld().items():
 		cell.set_edgecolor("#C3CBD7")
 		if row_idx == 0:
 			cell.set_facecolor("#E6EEF8")
 			cell.set_text_props(weight="bold")
-		elif col_idx == -1:
-			cell.set_facecolor("#F3F6FB")
-			cell.set_text_props(weight="bold")
+		elif row_idx % 2 == 0:
+			cell.set_facecolor("#F7F9FC")
 		else:
 			cell.set_facecolor("#FFFFFF")
 
-	title = (
-		f"Targeted Level 1 Summary | task={task} | model={model_type} | "
-		f"params={parameters:,} | base_acc={base_acc:.4f}"
-	)
+	title = f"Targeted Level 1 Bit Flip Summary | task={task}"
 	ax.set_title(title, fontsize=12, fontweight="bold", pad=12)
 
-	output_file = report_dir / f"targeted_{stem}_level1_table.png"
+	output_file = report_dir / f"targeted_level1_{task}_configs_table.png"
 	fig.tight_layout()
 	fig.savefig(output_file, dpi=220, bbox_inches="tight")
 	plt.close(fig)
+
+
+def model_sort_key(model_type: str) -> tuple[int, int]:
+	if model_type.startswith("DWN"):
+		rank = int(model_type.split("=")[1].rstrip(")"))
+		return (0, rank)
+	if model_type.startswith("BNN"):
+		return (1, 0)
+	if model_type.startswith("ConvBNN"):
+		return (2, 0)
+	return (3, 0)
+
+
+def build_level1_row(
+	model_type: str,
+	parameters: int,
+	base_acc: float,
+	level_data: dict[tuple[int, int], dict[str, list[float]]],
+) -> dict[str, str | int | float]:
+	row: dict[str, str | int | float] = {
+		"model_type": model_type,
+		"parameters": parameters,
+		"base_acc": base_acc,
+	}
+
+	for target in range(10):
+		pair = level_data.get((-1, target))
+		if pair is None:
+			row[f"t{target}"] = "N/A"
+			continue
+
+		agg = aggregate_pair_metrics(pair)
+		nb_mean = agg["nb_mean"]
+		nb_std = agg["nb_std"]
+		if np.isnan(nb_mean):
+			row[f"t{target}"] = "N/A"
+		else:
+			row[f"t{target}"] = f"{nb_mean:.1f} +/- {nb_std:.1f}"
+
+	return row
 
 
 def _draw_single_heatmap(
@@ -343,6 +358,7 @@ def main() -> None:
 		return
 
 	missing_param_keys: set[str] = set()
+	level1_grouped: dict[str, list[dict[str, str | int | float]]] = {}
 
 	for csv_file in files:
 		parsed = parse_targeted_filename(csv_file)
@@ -359,16 +375,14 @@ def main() -> None:
 		stem = csv_file.stem
 
 		if 1 in level_bucket:
-			save_level1_table(
-				stem=stem,
-				task=task,
-				model_type=model_type,
-				parameters=int(parameters),
-				base_acc=base_acc,
-				level_data=level_bucket[1],
-				report_dir=report_dir,
+			level1_grouped.setdefault(task, []).append(
+				build_level1_row(
+					model_type=model_type,
+					parameters=int(parameters),
+					base_acc=base_acc,
+					level_data=level_bucket[1],
+				)
 			)
-			print(f"Saved image: {report_dir / f'targeted_{stem}_level1_table.png'}")
 
 		for level in (2, 3):
 			if level not in level_bucket:
@@ -384,6 +398,11 @@ def main() -> None:
 				report_dir=report_dir,
 			)
 			print(f"Saved image: {report_dir / f'targeted_{stem}_level{level}_plots.png'}")
+
+	for task in sorted(level1_grouped):
+		rows = sorted(level1_grouped[task], key=lambda x: model_sort_key(str(x["model_type"])))
+		save_level1_table(task=task, rows=rows, report_dir=report_dir)
+		print(f"Saved image: {report_dir / f'targeted_level1_{task}_configs_table.png'}")
 
 	if missing_param_keys:
 		print("\nMissing parameter mappings for:")
