@@ -203,11 +203,12 @@ def convert_module(module: nn.Module) -> nn.Module:
     if isinstance(module, (LogicBase, OrPooling3d)):
         raise NotImplementedError(f"No DWN conversion for {type(module).__name__}.")
 
-    children = list(module.named_children())
-    converted = copy.deepcopy(module)
-    for name, child in children:
-        setattr(converted, name, convert_module(child))
-    return converted
+    # children = list(module.named_children())
+    # converted = copy.deepcopy(module)
+    # for name, child in children:
+    #     setattr(converted, name, convert_module(child))
+    # return converted
+    return module
 
 
 def convert_torchlogix_to_dwn(model: nn.Module) -> nn.Module:
@@ -218,6 +219,30 @@ def convert_torchlogix_to_dwn(model: nn.Module) -> nn.Module:
     exactly as for the torchlogix model in eval mode.
     """
     return convert_module(model)
+
+
+def convert_layers_to_dwn_sequential(sequential: nn.Sequential) -> nn.Sequential:
+    """Convert a torchlogix ``nn.Sequential`` into a DWN ``nn.Sequential``.
+
+    Each child is converted with :func:`convert_module`, in order. Layers that
+    need explicit zero padding (``LogicConv2d`` / ``OrPooling2d`` with
+    ``padding > 0``) expand into ``ConstantPad2d`` followed by the DWN layer, so
+    the result can have more modules than the input. Non-logic modules such as
+    ``Flatten`` or binarization are copied unchanged.
+
+    Example:
+        dwn_model = convert_layers_to_dwn_sequential(model.net).cuda()
+    """
+    if not isinstance(sequential, nn.Sequential):
+        raise TypeError(f"Expected nn.Sequential, got {type(sequential).__name__}.")
+    converted = []
+    for layer in sequential:
+        new_layer = convert_module(layer)
+        if type(new_layer) is nn.Sequential:
+            converted.extend(new_layer.children())
+        else:
+            converted.append(new_layer)
+    return nn.Sequential(*converted)
 
 
 @torch.no_grad()
