@@ -15,6 +15,8 @@ from types import SimpleNamespace
 from dsprites import CountingShapes, OrientationShapes
 import copy
 import pandas as pd
+from torch.autograd import Variable
+from torch.autograd.function  import Function, InplaceFunction
 
 #Note for using the convolution BNN for (f)mnist, first comment out the flatten in the transform
 #Then adjust the input to the "linear" layer of the BinaryVGG to 180
@@ -30,48 +32,118 @@ def hardend_model(model):
           layer.weight.data = ((layer.weight.data > 0).float() * 2) - 1
   return lf_model
 
-class SignSTE(torch.autograd.Function):
-	"""Binary sign with straight-through gradient estimator."""
 
-	@staticmethod
-	def forward(ctx, x: torch.Tensor) -> torch.Tensor:
-		ctx.save_for_backward(x)
-		return x.sign().masked_fill(x == 0, 1.0)
+class Binarize(InplaceFunction):
 
-	@staticmethod
-	def backward(ctx, grad_output: torch.Tensor) -> torch.Tensor:
-		(x,) = ctx.saved_tensors
-		grad_input = grad_output.clone()
-		grad_input[x.abs() > 1.0] = 0.0
-		return grad_input
+    def forward(ctx,input,quant_mode='det',allow_scale=False,inplace=False):
+        ctx.inplace = inplace
+        if ctx.inplace:
+            ctx.mark_dirty(input)
+            output = input
+        else:
+            output = input.clone()      
+
+        scale= output.abs().max() if allow_scale else 1
+
+        if quant_mode=='det':
+            return output.div(scale).sign().mul(scale)
+        else:
+            return output.div(scale).add_(1).div_(2).add_(torch.rand(output.size()).add(-0.5)).clamp_(0,1).round().mul_(2).add_(-1).mul(scale)
+        
+    def backward(ctx,grad_output):
+        #STE 
+        grad_input=grad_output
+        return grad_input,None,None,None
 
 
-def binarize(x: torch.Tensor) -> torch.Tensor:
-	return SignSTE.apply(x)
 
+def binarized(input,quant_mode='det'):
+      return Binarize.apply(input,quant_mode)  
 
-class BinaryActivation(nn.Module):
-	def forward(self, x: torch.Tensor) -> torch.Tensor:
-		return binarize(x)
 
 
 class BinaryLinear(nn.Linear):
-	def forward(self, input: torch.Tensor) -> torch.Tensor:
-		weight = binarize(self.weight)
-		return F.linear(input, weight, self.bias)
+
+    def __init__(self, *kargs, **kwargs):
+        super(BinaryLinear, self).__init__(*kargs, **kwargs)
+
+    def forward(self, input):
+
+        #if input.size(1) != 784:
+        input_b=binarized(input)
+        weight_b=binarized(self.weight)
+        out = nn.functional.linear(input_b,weight_b)
+        if not self.bias is None:
+            self.bias.org=self.bias.data.clone()
+            out += self.bias.view(1, -1).expand_as(out)
+
+        return out
 
 class BinaryConv2d(nn.Conv2d):
-	def forward(self, input: torch.Tensor) -> torch.Tensor:
-		weight = binarize(self.weight)
-		return F.conv2d(
-			input,
-			weight,
-			self.bias,
-			self.stride,
-			self.padding,
-			self.dilation,
-			self.groups,
-		)
+
+    def __init__(self, *kargs, **kwargs):
+        super(BinaryConv2d, self).__init__(*kargs, **kwargs)
+
+
+    def forward(self, input):
+        if input.size(1) != 3:
+            input_b = binarized(input)
+        else:
+            input_b=input
+        weight_b=binarized(self.weight)
+
+        out = nn.functional.conv2d(input_b, weight_b, None, self.stride,
+                                   self.padding, self.dilation, self.groups)
+
+        if not self.bias is None:
+            self.bias.org=self.bias.data.clone()
+            out += self.bias.view(1, -1, 1, 1).expand_as(out)
+
+        return out
+
+
+# class SignSTE(torch.autograd.Function):
+# 	"""Binary sign with straight-through gradient estimator."""
+
+# 	@staticmethod
+# 	def forward(ctx, x: torch.Tensor) -> torch.Tensor:
+# 		ctx.save_for_backward(x)
+# 		return x.sign().masked_fill(x == 0, 1.0)
+
+# 	@staticmethod
+# 	def backward(ctx, grad_output: torch.Tensor) -> torch.Tensor:
+# 		(x,) = ctx.saved_tensors
+# 		grad_input = grad_output.clone()
+# 		grad_input[x.abs() > 1.0] = 0.0
+# 		return grad_input
+
+
+# def binarize(x: torch.Tensor) -> torch.Tensor:
+# 	return SignSTE.apply(x)
+
+
+# class BinaryActivation(nn.Module):
+# 	def forward(self, x: torch.Tensor) -> torch.Tensor:
+# 		return binarize(x)
+
+
+# class BinaryLinear(nn.Linear):
+# 	def forward(self, input: torch.Tensor) -> torch.Tensor:
+# 		weight = binarize(self.weight)
+# 		return F.linear(input, weight, self.bias)
+
+# class BinaryConv2d(nn.Conv2d):
+# 	def forward(self, input: torch.Tensor) -> torch.Tensor:
+# 		weight = binarize(self.weight)
+# 		return F.conv2d(
+# 			input,
+# 			weight,
+# 			self.bias,
+# 			self.stride,
+# 			self.padding,
+# 			self.dilation,
+# 			self.groups,
+# 		)
 
 class MLP(nn.Module):
 	def __init__(self, input_dim: int, num_classes: int, width = 100, include_bn=True):
