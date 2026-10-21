@@ -15,8 +15,10 @@ from types import SimpleNamespace
 from dsprites import CountingShapes, OrientationShapes
 import copy
 import pandas as pd
-
-
+import torchlogix
+from torchlogix.models import ClgnCifar10Medium, ClgnCifar10Small, ClgnCifar10
+from o3_torchlogix import ClgnO3
+from TorchlogixToDWN import convert_layers_to_dwn_sequential #convert_layers_to_dwn_sequential
 
 device = "cuda"
 BATCH_SIZE = 128
@@ -76,15 +78,18 @@ def train_and_evaluate(model, optimizer, x_train, y_train, x_test, y_test, epoch
 
 experiments_comb_temp = {
     'mnist': [(4000,2),(4000,4),(4000,6),(16000,2),(1000,6)],
-    'ood': [(12000,4),(12000,6),(3000,6)]
+    #'ood': [(12000,4),(12000,6),(3000,6)]
+    'ood': [(32,2)],
+    'cifar': [(84,2)]
 }
 
 experiment_comb = {
-    'mnist': [(4000,4),(4000,6),(16000,2),(1000,6)],
+    'mnist': experiments_comb_temp['mnist'],
     'fmnist': experiments_comb_temp['mnist'],
     'counting': experiments_comb_temp['ood'],
     'orientation': experiments_comb_temp['ood'],
     'orientation-2obj': experiments_comb_temp['ood'],
+    'cifar': experiments_comb_temp['cifar']
 }
 
 # experiment_comb = {
@@ -101,7 +106,7 @@ for k,v in experiment_comb.items():
             'layer_size': layer_size,
             'n': lut_exponent,
             'tau_div': 0.07,
-            'lr': 0.01,
+            'lr': 0.01 if k in ['mnist', 'fmnist'] else 0.02,
             'step_size': 24,
             'epochs': 50
         }
@@ -128,13 +133,20 @@ for k,v in experiment_comb.items():
         #Epoch 50
             train_dataset = datasets.FashionMNIST(root='./data', train=True, download=True, transform=transform)
             test_dataset = datasets.FashionMNIST(root='./data', train=False, download=True, transform=transform)
+        elif args.task == "cifar":
+            transform = transforms.Compose([
+                transforms.ToTensor(),
+            ])
+            train_dataset = datasets.CIFAR10(root='./data', train=True, download=True, transform=transform)
+            test_dataset = datasets.CIFAR10(root='./data', train=False, download=True, transform=transform)
+            thresholds = torch.tensor([[0.25, 0.5, 0.75]] * 3)
         else:
             classes = 3
             resolution=(64, 64)
             out_size = args.layer_size
             transformation = transforms.Compose([
                 transforms.Resize(resolution),
-                transforms.Lambda(lambda x: x.flatten())
+                #transforms.Lambda(lambda x: x.flatten())
             ])
 
             match args.task:
@@ -151,6 +163,7 @@ for k,v in experiment_comb.items():
             train_dataset, test_dataset = torch.utils.data.random_split(all_data, [0.9, 0.1], generator=generator)
 
             in_size = 3 * resolution[0] * resolution[1]
+            thresholds = torch.tensor([[0.5]] * 3)
 
 
         train_loader = DataLoader(dataset=train_dataset, batch_size=len(train_dataset), shuffle=True)
@@ -161,36 +174,86 @@ for k,v in experiment_comb.items():
         print("Shape of images")
         print(x_train[0].shape)
 
+        if args.task in ['mnist', 'fmnist']:
         # Binarize with distributive thermometer
-        thermometer = dwn.DistributiveThermometer(3).fit(x_train)
-        x_train = thermometer.binarize(x_train).flatten(start_dim=1)
-        x_test = thermometer.binarize(x_test).flatten(start_dim=1)
+            thermometer = dwn.DistributiveThermometer(3).fit(x_train)
+            x_train = thermometer.binarize(x_train).flatten(start_dim=1)
+            x_test = thermometer.binarize(x_test).flatten(start_dim=1)
 
 
-        model = nn.Sequential(
-            dwn.LUTLayer(x_train.size(1), args.layer_size, n=args.n, mapping='learnable'),
-            dwn.LUTLayer(args.layer_size, args.layer_size // 2, n=args.n),
-            dwn.GroupSum(k=classes, tau=tau)
-        )
+            model = nn.Sequential(
+                dwn.LUTLayer(x_train.size(1), args.layer_size, n=args.n, mapping='learnable'),
+                dwn.LUTLayer(args.layer_size, args.layer_size // 2, n=args.n),
+                dwn.GroupSum(k=classes, tau=tau)
+            )
+        else:
+            if args.task == "cifar":
+                class ClgnCifar10SmallPlus(ClgnCifar10):
+                    n_input_bits = 3
+                    k_num = args.layer_size
+                    tau = 25
+                    group_size = 2
+                    group_size_input = 1
+
+                model = ClgnCifar10SmallPlus(
+                    thresholds=thresholds,
+                    binarization="fixed",
+                    binarization_kwargs={},
+                    connections_kwargs={"init_method": "random-unique"},  # random-unique FixedConvConnections
+                    parametrization="light"
+                    # **llkw: e.g. lut_rank=2, parametrization="raw", device="cuda"
+                )
+            else:
+                class ClgnO3Small(ClgnO3):
+                    n_input_bits = 1
+                    k_num = args.layer_size
+                    tau = 20
+                    group_size = 2
+                    group_size_input = 1
+                model = ClgnO3Small(
+                    thresholds=thresholds,
+                    binarization="fixed",
+                    binarization_kwargs={},
+                    connections_kwargs={"init_method": "random-unique"},  # random-unique FixedConvConnections
+                    parametrization="light"
+                )
 
         model = model.cuda()
 
         optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, gamma=0.1, step_size=args.step_size)
 
-        print(f"Model has {sum(p.numel() for p in model.parameters())} parameters.")
-        lut_size = 0
-        for layer_idx, layer in enumerate(model):
-                if isinstance(layer, dwn.LUTLayer):
-                    lut_size += layer.output_size * (2**args.n)
-        print(f"Model has {lut_size} lut entries")
+        
 
         save_dir = os.path.join(os.getcwd(), "models")
         os.makedirs(save_dir, exist_ok=True)
         model_path = os.path.join(save_dir, f"{args.task}_model_{args.n}_{args.layer_size}.pt")
          
         train_and_evaluate(model, optimizer, x_train, y_train, x_test, y_test, epochs=args.epochs, batch_size=BATCH_SIZE)
-        
+
+        print(f"Model has {sum(p.numel() for p in model.parameters())} parameters.")
+        if not (args.task in ['mnist', 'fmnist'] ):
+            model = convert_layers_to_dwn_sequential(model).cuda()
+            acc = evaluate(model, x_test, y_test)
+            print(f"converted model has accuracy: {acc}")
+            lut_size = 0
+            for layer_idx, layer in enumerate(model):
+                if isinstance(layer, dwn.LUTLayer):
+                    print(f"lut layer index {layer_idx}")
+                    lut_size += layer.output_size * (2**args.n)
+                elif isinstance(layer, dwn.DWNConvLayer):
+                    print(f"conv layer index {layer_idx}")
+                    lut_size += layer.kernels * (sum(layer.level_node_counts))
+                else:
+                    print(type(layer))
+
+            print(f"Model has {lut_size} lut entries")
+        else:
+            lut_size = 0
+            for layer_idx, layer in enumerate(model):
+                    if isinstance(layer, dwn.LUTLayer):
+                        lut_size += layer.output_size * (2**args.n)
+            print(f"Model has {lut_size} lut entries")
         torch.save(model.state_dict(), model_path) 
 
         print("++++++++++++++++++ STARTING UNTARGETED BIT FLIP ATTACKS ++++++++++++++++++++++")

@@ -33,117 +33,121 @@ def hardend_model(model):
   return lf_model
 
 
-class Binarize(InplaceFunction):
+# class Binarize(InplaceFunction):
 
-    def forward(ctx,input,quant_mode='det',allow_scale=False,inplace=False):
-        ctx.inplace = inplace
-        if ctx.inplace:
-            ctx.mark_dirty(input)
-            output = input
-        else:
-            output = input.clone()      
+#     def forward(ctx,input,quant_mode='det',allow_scale=False,inplace=False):
+#         ctx.inplace = inplace
+#         if ctx.inplace:
+#             ctx.mark_dirty(input)
+#             output = input
+#         else:
+#             output = input.clone()      
 
-        scale= output.abs().max() if allow_scale else 1
+#         scale= output.abs().max() if allow_scale else 1
 
-        if quant_mode=='det':
-            return output.div(scale).sign().mul(scale)
-        else:
-            return output.div(scale).add_(1).div_(2).add_(torch.rand(output.size()).add(-0.5)).clamp_(0,1).round().mul_(2).add_(-1).mul(scale)
+#         if quant_mode=='det':
+#             return output.div(scale).sign().mul(scale)
+#         else:
+#             return output.div(scale).add_(1).div_(2).add_(torch.rand(output.size()).add(-0.5)).clamp_(0,1).round().mul_(2).add_(-1).mul(scale)
         
-    def backward(ctx,grad_output):
-        #STE 
-        grad_input=grad_output
-        return grad_input,None,None,None
+#     def backward(ctx,grad_output):
+#         #STE 
+#         grad_input=grad_output
+#         return grad_input,None,None,None
 
 
 
-def binarized(input,quant_mode='det'):
-      return Binarize.apply(input,quant_mode)  
+# def binarized(input,quant_mode='det'):
+#       return Binarize.apply(input,quant_mode)  
 
-
-
-class BinaryLinear(nn.Linear):
-
-    def __init__(self, *kargs, **kwargs):
-        super(BinaryLinear, self).__init__(*kargs, **kwargs)
-
-    def forward(self, input):
-
-        #if input.size(1) != 784:
-        input_b=binarized(input)
-        weight_b=binarized(self.weight)
-        out = nn.functional.linear(input_b,weight_b)
-        if not self.bias is None:
-            self.bias.org=self.bias.data.clone()
-            out += self.bias.view(1, -1).expand_as(out)
-
-        return out
-
-class BinaryConv2d(nn.Conv2d):
-
-    def __init__(self, *kargs, **kwargs):
-        super(BinaryConv2d, self).__init__(*kargs, **kwargs)
-
-
-    def forward(self, input):
-        if input.size(1) != 3:
-            input_b = binarized(input)
-        else:
-            input_b=input
-        weight_b=binarized(self.weight)
-
-        out = nn.functional.conv2d(input_b, weight_b, None, self.stride,
-                                   self.padding, self.dilation, self.groups)
-
-        if not self.bias is None:
-            self.bias.org=self.bias.data.clone()
-            out += self.bias.view(1, -1, 1, 1).expand_as(out)
-
-        return out
-
-
-# class SignSTE(torch.autograd.Function):
-# 	"""Binary sign with straight-through gradient estimator."""
-
-# 	@staticmethod
-# 	def forward(ctx, x: torch.Tensor) -> torch.Tensor:
-# 		ctx.save_for_backward(x)
-# 		return x.sign().masked_fill(x == 0, 1.0)
-
-# 	@staticmethod
-# 	def backward(ctx, grad_output: torch.Tensor) -> torch.Tensor:
-# 		(x,) = ctx.saved_tensors
-# 		grad_input = grad_output.clone()
-# 		grad_input[x.abs() > 1.0] = 0.0
-# 		return grad_input
-
-
-# def binarize(x: torch.Tensor) -> torch.Tensor:
-# 	return SignSTE.apply(x)
-
-
-# class BinaryActivation(nn.Module):
-# 	def forward(self, x: torch.Tensor) -> torch.Tensor:
-# 		return binarize(x)
 
 
 # class BinaryLinear(nn.Linear):
-# 	def forward(self, input: torch.Tensor) -> torch.Tensor:
-# 		weight = binarize(self.weight)
-# 		return F.linear(input, weight, self.bias)
+
+#     def __init__(self, *kargs, **kwargs):
+#         super(BinaryLinear, self).__init__(*kargs, **kwargs)
+
+#     def forward(self, input):
+
+#         #if input.size(1) != 784:
+#         input_b=binarized(input)
+#         weight_b=binarized(self.weight)
+#         out = nn.functional.linear(input_b,weight_b)
+#         if not self.bias is None:
+#             self.bias.org=self.bias.data.clone()
+#             out += self.bias.view(1, -1).expand_as(out)
+
+#         return out
 
 # class BinaryConv2d(nn.Conv2d):
-# 	def forward(self, input: torch.Tensor) -> torch.Tensor:
-# 		weight = binarize(self.weight)
-# 		return F.conv2d(
-# 			input,
-# 			weight,
-# 			self.bias,
-# 			self.stride,
-# 			self.padding,
-# 			self.dilation,
-# 			self.groups,
-# 		)
+
+#     def __init__(self, *kargs, **kwargs):
+#         super(BinaryConv2d, self).__init__(*kargs, **kwargs)
+
+
+#     def forward(self, input):
+#         if input.size(1) != 3:
+#             input_b = binarized(input)
+#         else:
+#             input_b=input
+#         weight_b=binarized(self.weight)
+
+#         out = nn.functional.conv2d(input_b, weight_b, None, self.stride,
+#                                    self.padding, self.dilation, self.groups)
+
+#         if not self.bias is None:
+#             self.bias.org=self.bias.data.clone()
+#             out += self.bias.view(1, -1, 1, 1).expand_as(out)
+
+#         return out
+
+
+class SignSTE(torch.autograd.Function):
+	"""Binary sign with straight-through gradient estimator."""
+
+	@staticmethod
+	def forward(ctx, x: torch.Tensor) -> torch.Tensor:
+		ctx.save_for_backward(x)
+		return x.sign().masked_fill(x == 0, 1.0)
+
+	@staticmethod
+	def backward(ctx, grad_output: torch.Tensor) -> torch.Tensor:
+		(x,) = ctx.saved_tensors
+		grad_input = grad_output.clone()
+		grad_input[x.abs() > 1.0] = 0.0
+		return grad_input
+
+
+def binarize(x: torch.Tensor) -> torch.Tensor:
+	return SignSTE.apply(x)
+
+
+class BinaryActivation(nn.Module):
+	def forward(self, x: torch.Tensor) -> torch.Tensor:
+		return binarize(x)
+
+
+class BinaryLinear(nn.Linear):
+	def forward(self, input: torch.Tensor) -> torch.Tensor:
+		if input.size(1) != 784:
+			input = binarize(input)
+		weight = binarize(self.weight)
+		return F.linear(input, weight, self.bias)
+
+class BinaryConv2d(nn.Conv2d):
+	def forward(self, input: torch.Tensor) -> torch.Tensor:
+		if input.size(1) != 3:
+			input = binarize(input)
+		weight = binarize(self.weight)
+		return F.conv2d(
+			input,
+			weight,
+			self.bias,
+			self.stride,
+			self.padding,
+			self.dilation,
+			self.groups,
+		)
 
 class MLP(nn.Module):
 	def __init__(self, input_dim: int, num_classes: int, width = 100, include_bn=True):
@@ -196,11 +200,15 @@ def clip_weights(model: nn.Module, min_val: float = -1.0, max_val: float = 1.0) 
 			module.weight.clamp_(min_val, max_val)
 
 class BinaryVGG(nn.Module):
-	def __init__(self, in_channels: int, num_classes: int, base_channels: int = 128, include_bn=True):
+	def __init__(self, in_channels: int, num_classes: int, base_channels: int = 128, include_bn=True, cifar=False):
 		super().__init__()
 		c1 = base_channels
 		c2 = base_channels * 2
 		c3 = base_channels * 4
+		if cifar:
+			flatten_in = c3 * 4 * 4
+		else:
+			flatten_in = c3 * 8 * 8
 		self.net = nn.Sequential(
 			#features part
 			# Block 1
@@ -237,7 +245,7 @@ class BinaryVGG(nn.Module):
 
 			#classifier part
 			nn.Flatten(),
-			BinaryLinear(c3 * 8 * 8, 1024, bias=False),
+			BinaryLinear(flatten_in, 1024, bias=False),
 			nn.BatchNorm1d(1024),
 			#BinaryActivation(),
 			nn.Hardtanh(inplace=True),
@@ -296,13 +304,15 @@ def train_and_evaluate(model, optimizer, x_train, y_train, x_test, y_test, epoch
           test_acc = evaluate(model, x_test, y_test)
           print(f'Epoch {epoch + 1}/{epochs}, Train Loss: {loss.item():.4f}, Train Accuracy: {train_acc:.4f}, Test Accuracy: {test_acc:.4f}')
 
-
+#For cifar base_channel = 64, it gets to 70% acc
+#                       = 32; it get to 65% acc
 experiment_comb = {
     'mnist': 100,
     'fmnist': 100,
-    'counting': 5,
-    'orientation': 5,
-    'orientation-2obj': 5,
+    'counting': 64,
+    'orientation': 64,
+    'orientation-2obj': 64,
+    "cifar" : 64
 }
 
 for k,v in experiment_comb.items():
@@ -344,6 +354,15 @@ for k,v in experiment_comb.items():
             train_dataset = datasets.FashionMNIST(root='./data', train=True, download=True, transform=transform)
             test_dataset = datasets.FashionMNIST(root='./data', train=False, download=True, transform=transform)
             input_dim = train_dataset[0][0].numel()
+        elif args.task == 'cifar':
+            resolution=(32, 32)
+            out_size = args.layer_size
+            transformation = transforms.Compose([
+                transforms.ToTensor(),
+            ])
+            train_dataset = datasets.CIFAR10(root='./data', train=True, download=True, transform=transformation)
+            test_dataset = datasets.CIFAR10(root='./data', train=False, download=True, transform=transformation)
+            input_dim = 3 * resolution[0] * resolution[1]
         else:
             classes = 3
             resolution=(64, 64)
@@ -375,8 +394,8 @@ for k,v in experiment_comb.items():
         x_train, y_train = next(iter(train_loader))
         x_test, y_test = next(iter(test_loader))
 
-        if k in ['counting', 'orientation', 'orientation-2obj']:
-            model = BinaryVGG(in_channels=3, num_classes=classes, base_channels=args.layer_size, include_bn=include_bn).to(device)
+        if args.task in ['counting', 'orientation', 'orientation-2obj', 'cifar']:
+            model = BinaryVGG(in_channels=3, num_classes=classes, base_channels=args.layer_size, include_bn=include_bn, cifar=(args.task == 'cifar')).to(device)
         else:
             model = MLP(input_dim=input_dim, num_classes=classes, width=args.layer_size, include_bn=include_bn).to(device)
         print(f"Model has {sum(p.numel() for p in model.parameters())} parameters.")
@@ -388,7 +407,7 @@ for k,v in experiment_comb.items():
 
         save_dir = os.path.join(os.getcwd(), "models")
         os.makedirs(save_dir, exist_ok=True)
-        if args.task in ['counting', 'orientation', 'orientation-2obj']:
+        if args.task in ['counting', 'orientation', 'orientation-2obj', 'cifar']:
             model_path = os.path.join(save_dir, f"{args.task}_ConvBNN_model_{args.layer_size}.pt")
         else:
             model_path = os.path.join(save_dir, f"{args.task}_BNN_model_{args.layer_size}.pt")
@@ -421,6 +440,7 @@ for k,v in experiment_comb.items():
                 acc_hist = [acc]
                 layer_hist = []
                 loss_hist = []
+                bit_flip_hist = {}
                 while acc > 0.01 + 1/classes :
                     lf_model.train()
                     lf_model.zero_grad()
@@ -433,6 +453,9 @@ for k,v in experiment_comb.items():
                     for layer_idx, layer in enumerate(lf_model.net):
                         if isinstance(layer, (BinaryLinear, BinaryConv2d)):
                             grad_copy = torch.abs(layer.weight.grad.clone())
+                            if layer_idx in bit_flip_hist:
+                                for idx in bit_flip_hist[layer_idx]:
+                                    grad_copy[idx] = -torch.inf
                             while True:
                                 if grad_copy.max() == -torch.inf:
                                     break # All values have been exhausted/marked as inf
@@ -460,6 +483,9 @@ for k,v in experiment_comb.items():
 
                     crossl = max(best_gradients, key=lambda x: x[2])
                     lf_model.net[crossl[0]].weight.data[crossl[1]] = crossl[3]
+                    if crossl[0] not in bit_flip_hist:
+                        bit_flip_hist[crossl[0]] = []
+                    bit_flip_hist[crossl[0]].append(crossl[1])
                     nb_flips += 1
                     curr_acc = evaluate(lf_model, x_test, y_test)
                     acc_hist.append(curr_acc)
@@ -486,7 +512,7 @@ for k,v in experiment_comb.items():
                 torch.cuda.empty_cache()
         save_dir = os.path.join(os.getcwd(), "results")
         os.makedirs(save_dir, exist_ok=True)
-        if args.task in ['counting', 'orientation', 'orientation-2obj']:
+        if args.task in ['counting', 'orientation', 'orientation-2obj', 'cifar']:
             res_path = os.path.join(save_dir,f"bit_flip_untargeted_ConvBNN_{data_name}_{args.layer_size}.csv")
         else:
             res_path = os.path.join(save_dir,f"bit_flip_untargeted_BNN_{data_name}_{args.layer_size}.csv")
@@ -514,6 +540,7 @@ for k,v in experiment_comb.items():
                             layer_hist = []
                             loss_hist = []
                             ta_hist = []
+                            bit_flip_hist = {}
                             if level != 1:
                                 #source = 3
                                 x_test_source = x_test[y_test == source]
@@ -606,6 +633,9 @@ for k,v in experiment_comb.items():
                                             continue # Skip if no gradients for this layer
 
                                         grad_copy = torch.abs(layer.weight.grad.clone())
+                                        if layer_idx in bit_flip_hist:
+                                            for idx in bit_flip_hist[layer_idx]:
+                                                grad_copy[idx] = -torch.inf
                                         while True:
                                             if grad_copy.max() == -torch.inf:
                                                 break # All values have been exhausted/marked as inf
@@ -639,6 +669,7 @@ for k,v in experiment_comb.items():
                                 crossl = min(best_gradients, key=lambda x: x[2])
                                 with torch.no_grad(): # Added no_grad context
                                     lf_model.net[crossl[0]].weight.data[crossl[1]] = crossl[3]
+                                bit_flip_hist.setdefault(crossl[0], []).append(crossl[1])
                                 nb_flips += 1
                                 stop = stop_condition()
                                 acc_values = stop[1]
@@ -675,7 +706,7 @@ for k,v in experiment_comb.items():
 
         save_dir = os.path.join(os.getcwd(), "results")
         os.makedirs(save_dir, exist_ok=True)
-        if args.task in ['counting', 'orientation', 'orientation-2obj']:
+        if args.task in ['counting', 'orientation', 'orientation-2obj', 'cifar']:
             res_path = os.path.join(save_dir, f"bit_flip_targeted_ConvBNN_{data_name}_{args.layer_size}.csv")
         else:
             res_path = os.path.join(save_dir, f"bit_flip_targeted_BNN_{data_name}_{args.layer_size}.csv")
