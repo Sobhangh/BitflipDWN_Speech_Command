@@ -80,15 +80,15 @@ experiments_comb_temp = {
     'mnist': [(4000,2),(4000,4),(4000,6),(16000,2),(1000,6)],
     #'ood': [(12000,4),(12000,6),(3000,6)]
     'ood': [(32,2)],
-    'cifar': [(84,2)]
+    'cifar': [(80,2)]
 }
 
 experiment_comb = {
+    'orientation': experiments_comb_temp['ood'],
     'cifar': experiments_comb_temp['cifar'],
     'mnist': experiments_comb_temp['mnist'],
     'fmnist': experiments_comb_temp['mnist'],
     'counting': experiments_comb_temp['ood'],
-    'orientation': experiments_comb_temp['ood'],
     'orientation-2obj': experiments_comb_temp['ood'],
 }
 
@@ -230,10 +230,14 @@ for k,v in experiment_comb.items():
         model_path = os.path.join(save_dir, f"{args.task}_model_{args.n}_{args.layer_size}.pt")
          
         train_and_evaluate(model, optimizer, x_train, y_train, x_test, y_test, epochs=args.epochs, batch_size=BATCH_SIZE)
+        acc = evaluate(model, x_test, y_test)
+        print(f"Original model has accuracy: {acc}")
 
         print(f"Model has {sum(p.numel() for p in model.parameters())} parameters.")
         if not (args.task in ['mnist', 'fmnist'] ):
-            model = convert_layers_to_dwn_sequential(model).cuda()
+            dwn_model = convert_layers_to_dwn_sequential(model).cuda()
+            del model
+            model = dwn_model
             acc = evaluate(model, x_test, y_test)
             print(f"converted model has accuracy: {acc}")
             lut_size = 0
