@@ -84,12 +84,12 @@ experiments_comb_temp = {
 }
 
 experiment_comb = {
+    'cifar': experiments_comb_temp['cifar'],
     'mnist': experiments_comb_temp['mnist'],
     'fmnist': experiments_comb_temp['mnist'],
     'counting': experiments_comb_temp['ood'],
     'orientation': experiments_comb_temp['ood'],
     'orientation-2obj': experiments_comb_temp['ood'],
-    'cifar': experiments_comb_temp['cifar']
 }
 
 # experiment_comb = {
@@ -248,6 +248,8 @@ for k,v in experiment_comb.items():
                     print(type(layer))
 
             print(f"Model has {lut_size} lut entries")
+            gc.collect()
+            torch.cuda.empty_cache()
         else:
             lut_size = 0
             for layer_idx, layer in enumerate(model):
