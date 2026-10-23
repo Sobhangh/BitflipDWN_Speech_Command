@@ -84,10 +84,10 @@ experiments_comb_temp = {
 }
 
 experiment_comb = {
-    'orientation': experiments_comb_temp['ood'],
     'cifar': experiments_comb_temp['cifar'],
-    'mnist': experiments_comb_temp['mnist'],
-    'fmnist': experiments_comb_temp['mnist'],
+    'orientation': experiments_comb_temp['ood'],
+    #'mnist': experiments_comb_temp['mnist'],
+    #'fmnist': experiments_comb_temp['mnist'],
     'counting': experiments_comb_temp['ood'],
     'orientation-2obj': experiments_comb_temp['ood'],
 }
@@ -255,7 +255,7 @@ for k,v in experiment_comb.items():
             gc.collect()
             torch.cuda.empty_cache()
         else:
-            lut_size = 0
+            # lut_size = 
             for layer_idx, layer in enumerate(model):
                     if isinstance(layer, dwn.LUTLayer):
                         lut_size += layer.output_size * (2**args.n)
@@ -286,6 +286,7 @@ for k,v in experiment_comb.items():
                 acc_hist = [acc]
                 layer_hist = []
                 loss_hist = []
+                bit_flip_hist = {}
                 while acc > 0.01 + 1/classes :
 
                     lf_model.train()
@@ -299,7 +300,12 @@ for k,v in experiment_comb.items():
                     for layer_idx, layer in enumerate(lf_model):
                         if isinstance(layer, dwn.LUTLayer):
                             grad_copy = torch.abs(layer.luts.grad.clone())
+                            if layer_idx in bit_flip_hist:
+                                for idx in bit_flip_hist[layer_idx]:
+                                    grad_copy[idx] = -torch.inf
                             while True:
+                                if grad_copy.max() == -torch.inf:
+                                    break # All values have been exhausted/marked as inf
                                 max_flat_index = torch.argmax(grad_copy)
                                 #max_flat_index = torch.randint(0, grad_copy.shape.prod(), (1,)).item()
                                 max_row, max_col = torch.unravel_index(max_flat_index, layer.luts.grad.shape)
@@ -320,8 +326,13 @@ for k,v in experiment_comb.items():
                                     break
                             
 
+                    if not best_gradients:
+                        print("No suitable bit flips found. Breaking loop.")
+                        break
+
                     crossl = max(best_gradients, key=lambda x: x[3])
                     lf_model[crossl[0]].luts.data[crossl[1], crossl[2]] = crossl[4]
+                    bit_flip_hist.setdefault(crossl[0], []).append((crossl[1], crossl[2]))
                     nb_flips += 1
                     curr_acc = evaluate(lf_model, x_test, y_test)
                     acc_hist.append(curr_acc)
@@ -370,6 +381,7 @@ for k,v in experiment_comb.items():
                             layer_hist = []
                             loss_hist = []
                             ta_hist = []
+                            bit_flip_hist = {}
                             if level != 1:
                                 #source = 3
                                 x_test_source = x_test[y_test == source]
@@ -462,6 +474,9 @@ for k,v in experiment_comb.items():
                                             continue # Skip if no gradients for this layer
 
                                         grad_copy = torch.abs(layer.luts.grad.clone())
+                                        if layer_idx in bit_flip_hist:
+                                            for idx in bit_flip_hist[layer_idx]:
+                                                grad_copy[idx] = -torch.inf
                                         while True:
                                             if grad_copy.max() == -torch.inf:
                                                 break # All values have been exhausted/marked as inf
@@ -495,6 +510,7 @@ for k,v in experiment_comb.items():
                                 crossl = min(best_gradients, key=lambda x: x[3])
                                 with torch.no_grad(): # Added no_grad context
                                     lf_model[crossl[0]].luts.data[crossl[1], crossl[2]] = crossl[4]
+                                bit_flip_hist.setdefault(crossl[0], []).append((crossl[1], crossl[2]))
                                 nb_flips += 1
                                 stop = stop_condition()
                                 acc_values = stop[1]
