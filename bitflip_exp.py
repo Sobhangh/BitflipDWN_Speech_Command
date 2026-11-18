@@ -79,8 +79,8 @@ def train_and_evaluate(model, optimizer, x_train, y_train, x_test, y_test, epoch
 experiments_comb_temp = {
     'mnist': [(4000,2),(4000,4),(4000,6),(16000,2),(1000,6)],
     #'ood': [(12000,4),(12000,6),(3000,6)]
-    'ood': [(32,2)],
-    'cifar': [(80,2)]
+    'ood': [(24,2)],
+    'cifar': [(76,2)]
 }
 
 experiment_comb = {
@@ -237,9 +237,9 @@ for k,v in experiment_comb.items():
         if not (args.task in ['mnist', 'fmnist'] ):
             dwn_model = convert_layers_to_dwn_sequential(model).cuda()
             del model
+            gc.collect()
+            torch.cuda.empty_cache()
             model = dwn_model
-            acc = evaluate(model, x_test, y_test)
-            print(f"converted model has accuracy: {acc}")
             lut_size = 0
             for layer_idx, layer in enumerate(model):
                 if isinstance(layer, dwn.LUTLayer):
@@ -252,8 +252,7 @@ for k,v in experiment_comb.items():
                     print(type(layer))
 
             print(f"Model has {lut_size} lut entries")
-            gc.collect()
-            torch.cuda.empty_cache()
+            
         else:
             # lut_size = 
             for layer_idx, layer in enumerate(model):
@@ -261,6 +260,8 @@ for k,v in experiment_comb.items():
                         lut_size += layer.output_size * (2**args.n)
             print(f"Model has {lut_size} lut entries")
         torch.save(model.state_dict(), model_path) 
+        acc = evaluate(model, x_test, y_test)
+        print(f"converted model has accuracy: {acc}")
 
         print("++++++++++++++++++ STARTING UNTARGETED BIT FLIP ATTACKS ++++++++++++++++++++++")
 
